@@ -1,14 +1,8 @@
-'use strict';
-
 // Validates the matcher against the REAL Hex history on this machine.
-// Run: node daemon/test-match.js
-//
-// For each recent transcript we reconstruct a plausible [start, finish] window from
-// its own timing and confirm the matcher recovers exactly that transcript (and not a
-// neighbour of similar length/time).
+// Run: npm run build && npm run test:match
 
-const { readHistory } = require('./hex');
-const { matchTranscriptByWindow } = require('./matcher');
+import { readHistory } from './hex';
+import { matchTranscriptByWindow } from './matcher';
 
 const { ok, transcripts, error } = readHistory();
 if (!ok) {
@@ -22,16 +16,15 @@ let fail = 0;
 const N = Math.min(15, transcripts.length);
 for (let i = 0; i < N; i++) {
   const t = transcripts[i];
-  // Simulate the extension's measured window: you start ~duration before Hex's
-  // stamp and stop ~at it.
   const m = matchTranscriptByWindow({
     transcripts,
     seenIds: null,
-    tStartMs: t.startUnixMs,
-    tFinishMs: t.endUnixMs,
+    tStartMs: t.startUnixMs ?? 0,
+    tFinishMs: t.endUnixMs ?? 0,
   });
-  const good = m && m.transcript.id === t.id;
-  good ? pass++ : fail++;
+  const good = !!m && m.transcript.id === t.id;
+  if (good) pass++;
+  else fail++;
   console.log(
     `${good ? 'PASS' : 'FAIL'}  dur=${t.durationSec.toFixed(1)}s  ` +
       `score=${m ? m.score.toFixed(2) : 'n/a'}  conf=${m ? m.confidence.toFixed(2) : 'n/a'}  ` +

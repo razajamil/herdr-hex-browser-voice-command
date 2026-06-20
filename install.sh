@@ -7,7 +7,7 @@ set -euo pipefail
 LABEL="com.razajamil.voicerouter"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DAEMON_DIR="$REPO_DIR/daemon"
-SERVER_JS="$DAEMON_DIR/server.js"
+SERVER_JS="$DAEMON_DIR/dist/server.js"
 TEMPLATE="$DAEMON_DIR/$LABEL.plist.template"
 PLIST_DEST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG_DIR="$HOME/Library/Logs"
@@ -35,6 +35,11 @@ AGENT_PATH="$HOME/.local/bin:$NODE_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin
 HERDR_BIN_PATH="$(command -v herdr || echo herdr)"
 echo "  herdr:   $HERDR_BIN_PATH"
 
+# 2b. Install deps + build TypeScript (daemon/dist + extension/dist). Must succeed before
+#     launchd points at dist/server.js.
+echo "  building (npm install + npm run build)…"
+( cd "$REPO_DIR" && npm install && npm run build ) || { echo "✗ build failed — see output above" >&2; exit 1; }
+
 # 3. Render the plist.
 mkdir -p "$LOG_DIR" "$(dirname "$PLIST_DEST")"
 sed -e "s|__LABEL__|$LABEL|g" \
@@ -50,21 +55,22 @@ echo "  plist:   $PLIST_DEST"
 
 # 4. (Re)load via launchd.
 launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null || true
+# bootstrap + RunAtLoad starts it. Avoid `kickstart -k` here: kill+respawn trips launchd's
+# ~10s restart throttle and the health-wait below would false-alarm.
 launchctl bootstrap "gui/$UID_NUM" "$PLIST_DEST"
 launchctl enable "gui/$UID_NUM/$LABEL"
-launchctl kickstart -k "gui/$UID_NUM/$LABEL"
 echo "  launchd: loaded + started"
 
 # 5. Wait for the daemon to answer.
 printf "  waiting for daemon"
-for i in $(seq 1 20); do
+for i in $(seq 1 40); do
   if curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
     echo " — up!"
     break
   fi
   printf "."
   sleep 0.5
-  if [ "$i" -eq 20 ]; then
+  if [ "$i" -eq 40 ]; then
     echo
     echo "✗ daemon did not become healthy. Check: $LOG_ERR" >&2
     exit 1

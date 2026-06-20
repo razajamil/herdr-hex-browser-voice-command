@@ -1,62 +1,75 @@
-'use strict';
-
 // voicerouter daemon
 // ------------------
-// - Streams active-tab URLs from the extension into a timeline (POST /active-url).
-// - Watches Hex's transcription_history.json; when a NEW transcript appears, picks the
-//   URL that was active during its recording window and "routes" it (Approach B).
-// - Accepts optional recording brackets (POST /recording) from the extension's key
-//   detection to sharpen URL attribution.
-// - herdr delivery is stubbed in route() — that's the next milestone.
+// - Streams active-tab URLs + window focus from the extension into timelines.
+// - Watches Hex's transcription_history.json; on a NEW transcript, picks the URL active
+//   during its recording window and delivers it to the herdr pane named by a routing rule.
+// - Routing rules + the focus-gate setting are synced from the extension via POST /config.
 
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
-const cfg = require('./config');
-const { readHistory } = require('./hex');
-const { selectUrlForTranscript, matchTranscriptByWindow } = require('./matcher');
-const { matchRoute, resolveTarget, deliver } = require('./herdr');
+import http from 'http';
+import fs from 'fs';
+import path from 'path';
+import { cfg } from './config';
+import { readHistory } from './hex';
+import type { Transcript } from './hex';
+import { selectUrlForTranscript, matchTranscriptByWindow } from './matcher';
+import type { UrlEntry } from './matcher';
+import { matchRoute, resolveTarget, deliver } from './herdr';
+import { ConfigSchema, type Route } from '../../shared/config-schema';
 
 const startedAt = Date.now();
 
 // ---- state ----
-const urlTimeline = []; // { ts, url, tabId, title }
-const focusTimeline = []; // { ts, focused }  — is any Chrome window frontmost
-const seenIds = new Set();
-let lastMatch = null;
-let lastError = null;
-let pendingBracket = null; // { tStartMs, tFinishMs, startUrl, startTitle, tabId }
+interface FocusEntry {
+  ts: number;
+  focused: boolean;
+}
+interface PendingBracket {
+  tStartMs: number;
+  tFinishMs: number | null;
+  startUrl: string | null;
+  startTitle: string | null;
+  tabId: number | null;
+}
+interface RouteMeta {
+  reason: string;
+  source: string;
+}
+type Delivery = { status: string; [k: string]: unknown };
+
+const urlTimeline: UrlEntry[] = [];
+const focusTimeline: FocusEntry[] = [];
+const seenIds = new Set<string>();
+let lastMatch: Record<string, unknown> | null = null;
+let lastError: string | null = null;
+let pendingBracket: PendingBracket | null = null;
 
 // Settings synced from the extension (extension is the source of truth). Defaults are
-// permissive so behavior is unchanged if no extension has connected yet.
-const config = {
-  requireBrowserFocus: false, // only route if Chrome was focused at recording time
-  // Routing rules, owned by the extension and pushed via /config. This default keeps the
-  // daemon working before the extension syncs. {workspace} captures the herdr workspace key.
+// permissive so behavior is unchanged before an extension connects.
+const config: { requireBrowserFocus: boolean; routes: Route[] } = {
+  requireBrowserFocus: false,
   routes: [
     { name: 'Payroll dev', urlPattern: 'http://{workspace}.payroll.localhost/*', tabName: 'main', paneName: 'agent' },
   ],
 };
 
 // ---- helpers ----
-function log(...args) {
+function log(...args: unknown[]): void {
   console.log(new Date().toISOString(), ...args);
 }
 
-function prune(arr) {
+function prune(arr: { ts: number }[]): void {
   const cutoff = Date.now() - cfg.TIMELINE_TTL_MS;
   while (arr.length > cfg.TIMELINE_MAX || (arr.length && arr[0].ts < cutoff)) arr.shift();
 }
 
-function pushUrl(entry) {
+function pushUrl(entry: UrlEntry): void {
   urlTimeline.push(entry);
   prune(urlTimeline);
 }
 
-// Focus state as of a given moment = the last focus event at/before it.
-// Returns true | false | null (unknown — no focus data yet).
-function wasFocusedAt(ms) {
-  let state = null;
+// Focus state as of a moment = the last focus event at/before it. true | false | null (unknown).
+function wasFocusedAt(ms: number): boolean | null {
+  let state: boolean | null = null;
   for (const e of focusTimeline) {
     if (e.ts <= ms) state = e.focused;
     else break;
@@ -64,7 +77,7 @@ function wasFocusedAt(ms) {
   return state;
 }
 
-function send(res, status, obj) {
+function send(res: http.ServerResponse, status: number, obj: unknown): void {
   res.writeHead(status, {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
@@ -74,21 +87,25 @@ function send(res, status, obj) {
   res.end(JSON.stringify(obj));
 }
 
-function readBody(req) {
+function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
     let data = '';
     req.on('data', (c) => (data += c));
     req.on('end', () => {
       if (!data) return resolve({});
-      try { resolve(JSON.parse(data)); } catch { resolve({}); }
+      try {
+        resolve(JSON.parse(data));
+      } catch {
+        resolve({});
+      }
     });
   });
 }
 
 // ---- routing ----
-async function route(transcript, urlEntry, meta) {
+async function route(transcript: Transcript, urlEntry: UrlEntry | null, meta: RouteMeta): Promise<void> {
   const url = urlEntry ? urlEntry.url : null;
-  lastMatch = {
+  const match: Record<string, unknown> = {
     at: Date.now(),
     transcriptId: transcript.id,
     textPreview: transcript.text.slice(0, 140),
@@ -99,68 +116,70 @@ async function route(transcript, urlEntry, meta) {
     source: meta.source,
     delivery: null,
   };
+  lastMatch = match;
   log(`MATCH [${meta.source}] ${transcript.id} -> ${url || '(no url)'} (${meta.reason})`);
   log(`   "${transcript.text.slice(0, 80)}${transcript.text.length > 80 ? '…' : ''}"`);
 
   // Focus gate: only route if Chrome was focused when the recording started.
   if (config.requireBrowserFocus) {
-    const focused = wasFocusedAt(transcript.startUnixMs);
+    const focused = wasFocusedAt(transcript.startUnixMs ?? 0);
     if (focused === false) {
       log('   skip: browser window not focused at recording time (requireBrowserFocus)');
-      lastMatch.delivery = { status: 'skipped', reason: 'browser-not-focused' };
+      match.delivery = { status: 'skipped', reason: 'browser-not-focused' };
       return;
     }
     if (focused === null) log('   note: focus state unknown at recording time; routing anyway');
   }
 
-  lastMatch.delivery = await deliverToHerdr(url, transcript.text, { submit: true });
+  match.delivery = await deliverToHerdr(url, transcript.text, { submit: true });
 }
 
-// Gate on the payroll dev URL, resolve the herdr pane, deliver the text. Shared by the
-// watcher (real routing) and the /route-test endpoint (safe manual testing).
-async function deliverToHerdr(url, text, { submit = true, dryRun = false } = {}) {
-  const match = matchRoute(url, config.routes);
-  if (!match) {
+// Match the URL against the configured routes, resolve the herdr pane, deliver. Shared by
+// the watcher (real routing) and the /route-test endpoint (safe manual testing).
+async function deliverToHerdr(
+  url: string | null,
+  text: string,
+  opts: { submit?: boolean; dryRun?: boolean } = {}
+): Promise<Delivery> {
+  const submit = opts.submit !== false;
+  const dryRun = opts.dryRun === true;
+
+  const matched = matchRoute(url, config.routes);
+  if (!matched) {
     log(`   skip: no route matches ${url || 'no url'}`);
     return { status: 'skipped', reason: 'no-matching-route', url };
   }
-  const { route, key } = match;
+  const { route: rule, key } = matched;
   if (!key) {
-    log(`   skip: route "${route.name}" pattern has no {capture} for the workspace key`);
-    return { status: 'skipped', reason: 'no-workspace-key', route: route.name };
+    log(`   skip: route "${rule.name}" pattern has no {capture} for the workspace key`);
+    return { status: 'skipped', reason: 'no-workspace-key', route: rule.name };
   }
   try {
-    const target = await resolveTarget(key, route.tabName, route.paneName);
+    const target = await resolveTarget(key, rule.tabName, rule.paneName);
     if (!target.ok) {
-      log(`   skip: route "${route.name}" → no target for "${key}" (${target.reason})`);
-      return { status: 'unresolved', route: route.name, ...target };
+      log(`   skip: route "${rule.name}" → no target for "${key}" (${target.reason})`);
+      return { status: 'unresolved', route: rule.name, ...target };
     }
     if (dryRun) {
-      log(`   dry-run: route "${route.name}" → ${target.workspaceLabel} ${target.paneId} (${target.tabName}/${target.paneName})`);
-      return { status: 'resolved', route: route.name, ...target };
+      log(`   dry-run: route "${rule.name}" → ${target.workspaceLabel} ${target.paneId} (${target.tabName}/${target.paneName})`);
+      return { status: 'resolved', route: rule.name, ...target };
     }
     const d = await deliver(target.paneId, text, { submit });
-    log(`   delivered via "${route.name}" to ${target.workspaceLabel} ${target.paneId}${submit ? ' + Enter' : ' (no submit)'}`);
-    return { status: 'delivered', route: route.name, ...target, ...d };
+    log(`   delivered via "${rule.name}" to ${target.workspaceLabel} ${target.paneId}${submit ? ' + Enter' : ' (no submit)'}`);
+    return { status: 'delivered', route: rule.name, ...target, ...d };
   } catch (err) {
-    log(`   delivery error for "${key}": ${err.message}`);
-    return { status: 'error', key, error: err.message };
+    log(`   delivery error for "${key}": ${(err as Error).message}`);
+    return { status: 'error', key, error: (err as Error).message };
   }
 }
 
-// ---- transcript watcher (the primary signal) ----
-function handleNewTranscript(t) {
-  // Prefer an explicit recording bracket from the extension if it lines up in time.
+// ---- transcript watcher (primary signal) ----
+function handleNewTranscript(t: Transcript): void {
   if (pendingBracket && pendingBracket.tFinishMs != null && t.endUnixMs != null) {
     const near = Math.abs(t.endUnixMs - pendingBracket.tFinishMs) <= cfg.BRACKET_MATCH_TOLERANCE_MS;
     if (near) {
-      const entry = pendingBracket.startUrl
-        ? {
-            ts: pendingBracket.tStartMs,
-            url: pendingBracket.startUrl,
-            title: pendingBracket.startTitle,
-            tabId: pendingBracket.tabId,
-          }
+      const entry: UrlEntry | null = pendingBracket.startUrl
+        ? { ts: pendingBracket.tStartMs, url: pendingBracket.startUrl, title: pendingBracket.startTitle, tabId: pendingBracket.tabId }
         : selectUrlForTranscript(t, urlTimeline).entry;
       route(t, entry, { reason: 'explicit-bracket', source: 'watcher+bracket' }).catch((e) => log('route error:', e.message));
       pendingBracket = null;
@@ -171,7 +190,7 @@ function handleNewTranscript(t) {
   route(t, sel.entry, { reason: sel.reason, source: 'watcher' }).catch((e) => log('route error:', e.message));
 }
 
-function scanForNewTranscripts({ seedOnly = false } = {}) {
+function scanForNewTranscripts(opts: { seedOnly?: boolean } = {}): void {
   const { ok, transcripts, error } = readHistory();
   if (!ok) {
     lastError = error;
@@ -182,35 +201,35 @@ function scanForNewTranscripts({ seedOnly = false } = {}) {
   fresh.reverse(); // newest-first -> oldest-first so logs read chronologically
   for (const t of fresh) {
     seenIds.add(t.id);
-    if (!seedOnly) handleNewTranscript(t);
+    if (!opts.seedOnly) handleNewTranscript(t);
   }
-  if (seedOnly) log(`seeded ${seenIds.size} existing transcript id(s)`);
+  if (opts.seedOnly) log(`seeded ${seenIds.size} existing transcript id(s)`);
 }
 
-function watchHistory() {
+function watchHistory(): void {
   const file = cfg.HEX_HISTORY_PATH;
   const dir = path.dirname(file);
   const base = path.basename(file);
-  let timer = null;
+  let timer: NodeJS.Timeout | null = null;
   const onChange = () => {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
     timer = setTimeout(() => scanForNewTranscripts(), cfg.WATCH_DEBOUNCE_MS);
   };
-  // Watch the directory, not the file: Hex writes atomically (temp + rename), which
-  // breaks a watch bound to the original inode.
+  // Watch the directory, not the file: Hex writes atomically (temp + rename), which breaks
+  // a watch bound to the original inode.
   try {
     fs.watch(dir, (_evt, fname) => {
       if (!fname || fname === base) onChange();
     });
     log(`watching ${file}`);
   } catch (err) {
-    log(`fs.watch failed (${err.message}); polling every 1s instead`);
+    log(`fs.watch failed (${(err as Error).message}); polling every 1s instead`);
     setInterval(() => scanForNewTranscripts(), 1000);
   }
 }
 
 // After a "finish", poll briefly in case fs.watch is slow / Hex throttles its write.
-function scheduleNudge() {
+function scheduleNudge(): void {
   let n = 0;
   const iv = setInterval(() => {
     scanForNewTranscripts();
@@ -221,7 +240,7 @@ function scheduleNudge() {
 // ---- HTTP server ----
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') return send(res, 204, {});
-  const u = new URL(req.url, `http://${cfg.HOST}:${cfg.PORT}`);
+  const u = new URL(req.url || '/', `http://${cfg.HOST}:${cfg.PORT}`);
   const key = `${req.method} ${u.pathname}`;
 
   try {
@@ -269,8 +288,13 @@ const server = http.createServer(async (req, res) => {
 
     if (key === 'POST /active-url') {
       const b = await readBody(req);
-      if (!b.url) return send(res, 400, { ok: false, error: 'url required' });
-      pushUrl({ ts: Number(b.ts) || Date.now(), url: b.url, tabId: b.tabId ?? null, title: b.title || null });
+      if (typeof b.url !== 'string') return send(res, 400, { ok: false, error: 'url required' });
+      pushUrl({
+        ts: Number(b.ts) || Date.now(),
+        url: b.url,
+        tabId: typeof b.tabId === 'number' ? b.tabId : null,
+        title: typeof b.title === 'string' ? b.title : null,
+      });
       return send(res, 200, { ok: true, timelineSize: urlTimeline.length });
     }
 
@@ -282,10 +306,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (key === 'POST /config') {
-      // Partial merge — extension pushes whatever settings it owns.
-      const b = await readBody(req);
-      if (typeof b.requireBrowserFocus === 'boolean') config.requireBrowserFocus = b.requireBrowserFocus;
-      if (Array.isArray(b.routes)) config.routes = b.routes;
+      const parsed = ConfigSchema.safeParse(await readBody(req));
+      if (!parsed.success) {
+        return send(res, 400, { ok: false, error: 'invalid config', issues: parsed.error.issues });
+      }
+      // Partial merge: only overwrite keys that were actually provided.
+      if (parsed.data.requireBrowserFocus !== undefined) config.requireBrowserFocus = parsed.data.requireBrowserFocus;
+      if (parsed.data.routes !== undefined) config.routes = parsed.data.routes;
       return send(res, 200, { ok: true, config });
     }
 
@@ -293,8 +320,14 @@ const server = http.createServer(async (req, res) => {
       const b = await readBody(req);
       const ts = Number(b.ts) || Date.now();
       if (b.phase === 'start') {
-        pendingBracket = { tStartMs: ts, tFinishMs: null, startUrl: b.url || null, startTitle: b.title || null, tabId: b.tabId ?? null };
-        log(`recording START url=${b.url || '(none)'}`);
+        pendingBracket = {
+          tStartMs: ts,
+          tFinishMs: null,
+          startUrl: typeof b.url === 'string' ? b.url : null,
+          startTitle: typeof b.title === 'string' ? b.title : null,
+          tabId: typeof b.tabId === 'number' ? b.tabId : null,
+        };
+        log(`recording START url=${typeof b.url === 'string' ? b.url : '(none)'}`);
       } else if (b.phase === 'finish') {
         if (pendingBracket) pendingBracket.tFinishMs = ts;
         log('recording FINISH (awaiting transcript)');
@@ -307,7 +340,6 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (key === 'POST /match') {
-      // Debug: explicit-window match against ALL transcripts (ignores seenIds).
       const b = await readBody(req);
       const { transcripts } = readHistory();
       const m = matchTranscriptByWindow({
@@ -333,13 +365,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (key === 'POST /route-test') {
-      // End-to-end test without needing real voice. Defaults are SAFE: dry-run resolves
-      // the target but sends nothing. Pass {"submit":true} to actually type+Enter, or
-      // {"dryRun":false,"submit":false} to type into the pane without submitting.
+      // End-to-end test without real voice. Defaults safe (dry-run, no submit).
       const b = await readBody(req);
-      if (!b.url) return send(res, 400, { ok: false, error: 'url required' });
+      if (typeof b.url !== 'string') return send(res, 400, { ok: false, error: 'url required' });
       const dryRun = b.dryRun !== false; // default true
-      const result = await deliverToHerdr(b.url, b.text || '[voice-router test]', {
+      const result = await deliverToHerdr(b.url, typeof b.text === 'string' ? b.text : '[voice-router test]', {
         dryRun,
         submit: b.submit === true,
       });
@@ -348,13 +378,25 @@ const server = http.createServer(async (req, res) => {
 
     return send(res, 404, { ok: false, error: 'not found' });
   } catch (err) {
-    return send(res, 500, { ok: false, error: err.message });
+    return send(res, 500, { ok: false, error: (err as Error).message });
   }
 });
 
 // ---- boot ----
-scanForNewTranscripts({ seedOnly: true }); // don't route pre-existing history on startup
-watchHistory();
+try {
+  scanForNewTranscripts({ seedOnly: true }); // don't route pre-existing history on startup
+  watchHistory();
+} catch (err) {
+  log('boot warning:', (err as Error).message);
+}
+
+// Surface listen failures (e.g. EADDRINUSE) instead of zombie-ing alive-but-not-listening;
+// exiting lets launchd's KeepAlive respawn cleanly.
+server.on('error', (err) => {
+  log('FATAL server error:', (err as Error).message);
+  process.exit(1);
+});
+
 server.listen(cfg.PORT, cfg.HOST, () => {
   log(`voicerouter ${cfg.VERSION} listening on http://${cfg.HOST}:${cfg.PORT}`);
   log(`hex history: ${cfg.HEX_HISTORY_PATH}`);

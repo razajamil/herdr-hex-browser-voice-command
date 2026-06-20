@@ -5,11 +5,11 @@
   "description": "Routes Hex voice transcripts to the right Claude Code pane based on the active browser tab.",
   "permissions": ["tabs", "alarms", "storage"],
   "host_permissions": ["http://127.0.0.1:8137/*", "http://localhost:8137/*"],
-  "background": { "service_worker": "background.js" },
+  "background": { "service_worker": "dist/background.js" },
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["content.js"],
+      "js": ["dist/content.js"],
       "run_at": "document_start",
       "all_frames": false
     }

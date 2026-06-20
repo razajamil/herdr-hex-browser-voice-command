@@ -1,28 +1,33 @@
-const DEFAULT_ROUTES = [
+import { RouteSchema, type Route } from '../../shared/config-schema';
+
+const DEFAULT_ROUTES: Route[] = [
   { name: 'Payroll dev', urlPattern: 'http://{workspace}.payroll.localhost/*', tabName: 'main', paneName: 'agent' },
 ];
 
-let routes = [];
+let routes: Route[] = [];
 
-const listEl = document.getElementById('routes');
-const savedEl = document.getElementById('saved');
+const listEl = document.getElementById('routes')!;
+const savedEl = document.getElementById('saved')!;
 
-function escAttr(s) {
+function escAttr(s: string | null | undefined): string {
   return String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
 
-// Pull current input values back into the `routes` array (so edits survive add/remove).
-function collect() {
-  const cards = listEl.querySelectorAll('.route');
-  routes = Array.from(cards).map((card) => ({
-    name: card.querySelector('.f-name').value.trim(),
-    urlPattern: card.querySelector('.f-url').value.trim(),
-    tabName: card.querySelector('.f-tab').value.trim() || 'main',
-    paneName: card.querySelector('.f-pane').value.trim() || 'agent',
+function val(card: Element, sel: string): string {
+  return (card.querySelector(sel) as HTMLInputElement).value.trim();
+}
+
+// Pull current input values back into `routes` (so edits survive add/remove).
+function collect(): void {
+  routes = Array.from(listEl.querySelectorAll('.route')).map((card) => ({
+    name: val(card, '.f-name'),
+    urlPattern: val(card, '.f-url'),
+    tabName: val(card, '.f-tab') || 'main',
+    paneName: val(card, '.f-pane') || 'agent',
   }));
 }
 
-function render() {
+function render(): void {
   if (!routes.length) {
     listEl.innerHTML = '<div class="empty">No routes yet — add one below.</div>';
     return;
@@ -55,27 +60,29 @@ function render() {
   });
 }
 
-document.getElementById('add').addEventListener('click', () => {
+document.getElementById('add')!.addEventListener('click', () => {
   collect();
   routes.push({ name: '', urlPattern: '', tabName: 'main', paneName: 'agent' });
   render();
-  const last = listEl.querySelector('.route:last-child .f-name');
+  const last = listEl.querySelector('.route:last-child .f-name') as HTMLInputElement | null;
   if (last) last.focus();
 });
 
-document.getElementById('save').addEventListener('click', async () => {
+document.getElementById('save')!.addEventListener('click', async () => {
   collect();
-  // Drop fully-empty rows.
   routes = routes.filter((r) => r.name || r.urlPattern);
+  // Validate against the shared schema before storing (background re-validates before POST).
+  const parsed = RouteSchema.array().safeParse(routes);
+  const toStore = parsed.success ? parsed.data : routes;
   const { settings } = await chrome.storage.local.get('settings');
-  await chrome.storage.local.set({ settings: { ...(settings || {}), routes } });
+  await chrome.storage.local.set({ settings: { ...(settings ?? {}), routes: toStore } });
   render();
   savedEl.classList.add('show');
   setTimeout(() => savedEl.classList.remove('show'), 1500);
 });
 
 (async function load() {
-  const { settings } = await chrome.storage.local.get('settings');
-  routes = settings && Array.isArray(settings.routes) ? settings.routes.slice() : DEFAULT_ROUTES.slice();
+  const stored = (await chrome.storage.local.get('settings')).settings as { routes?: Route[] } | undefined;
+  routes = stored && Array.isArray(stored.routes) ? stored.routes.slice() : DEFAULT_ROUTES.slice();
   render();
 })();

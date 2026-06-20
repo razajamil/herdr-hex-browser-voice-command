@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Voice Router",
+  "version": "0.1.0",
+  "description": "Routes Hex voice transcripts to the right Claude Code pane based on the active browser tab.",
+  "permissions": ["tabs", "alarms", "storage"],
+  "host_permissions": ["http://127.0.0.1:8137/*", "http://localhost:8137/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "action": { "default_title": "Voice Router", "default_popup": "popup.html" }
+}

@@ -1,0 +1,28 @@
+<meta charset="utf-8" />
+<style>
+  body { font: 13px/1.45 -apple-system, system-ui, sans-serif; width: 320px; margin: 0; padding: 12px; color: #1f2328; }
+  h1 { font-size: 13px; margin: 0 0 10px; display: flex; align-items: center; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; background: #cf222e; }
+  .dot.ok { background: #1a7f37; }
+  .row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; }
+  .k { color: #57606a; }
+  .v { font-weight: 600; text-align: right; word-break: break-all; }
+  .card { margin-top: 10px; padding: 9px; background: #f6f8fa; border-radius: 6px; }
+  .muted { color: #8c959f; }
+  code { background: #eaeef2; padding: 1px 4px; border-radius: 4px; font-size: 11px; }
+  .settings { margin-top: 12px; padding-top: 10px; border-top: 1px solid #eaeef2; }
+  .opt { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+  .opt input { margin: 2px 0 0; }
+  .opt .hint { color: #8c959f; font-size: 11px; margin-top: 2px; }
+</style>
+<h1><span id="dot" class="dot"></span><span id="status">checking…</span></h1>
+<div id="body" class="muted">—</div>
+<div class="settings">
+  <label class="opt">
+    <input type="checkbox" id="requireFocus" />
+    <span>Only route when this browser window is focused
+      <span class="hint">Off: routes even when Chrome is in the background.</span>
+    </span>
+  </label>
+</div>
+<script src="popup.js"></script>

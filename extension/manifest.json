@@ -14,5 +14,6 @@
       "all_frames": false
     }
   ],
-  "action": { "default_title": "Voice Router", "default_popup": "popup.html" }
+  "action": { "default_title": "Voice Router", "default_popup": "popup.html" },
+  "options_ui": { "page": "options.html", "open_in_tab": true }
 }

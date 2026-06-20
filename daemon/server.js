@@ -15,7 +15,7 @@ const path = require('path');
 const cfg = require('./config');
 const { readHistory } = require('./hex');
 const { selectUrlForTranscript, matchTranscriptByWindow } = require('./matcher');
-const { payrollKeyFromUrl, resolveTarget, deliver } = require('./herdr');
+const { matchRoute, resolveTarget, deliver } = require('./herdr');
 
 const startedAt = Date.now();
 
@@ -31,6 +31,11 @@ let pendingBracket = null; // { tStartMs, tFinishMs, startUrl, startTitle, tabId
 // permissive so behavior is unchanged if no extension has connected yet.
 const config = {
   requireBrowserFocus: false, // only route if Chrome was focused at recording time
+  // Routing rules, owned by the extension and pushed via /config. This default keeps the
+  // daemon working before the extension syncs. {workspace} captures the herdr workspace key.
+  routes: [
+    { name: 'Payroll dev', urlPattern: 'http://{workspace}.payroll.localhost/*', tabName: 'main', paneName: 'agent' },
+  ],
 };
 
 // ---- helpers ----
@@ -114,24 +119,29 @@ async function route(transcript, urlEntry, meta) {
 // Gate on the payroll dev URL, resolve the herdr pane, deliver the text. Shared by the
 // watcher (real routing) and the /route-test endpoint (safe manual testing).
 async function deliverToHerdr(url, text, { submit = true, dryRun = false } = {}) {
-  const key = payrollKeyFromUrl(url);
+  const match = matchRoute(url, config.routes);
+  if (!match) {
+    log(`   skip: no route matches ${url || 'no url'}`);
+    return { status: 'skipped', reason: 'no-matching-route', url };
+  }
+  const { route, key } = match;
   if (!key) {
-    log(`   skip: not a payroll dev URL (${url || 'no url'})`);
-    return { status: 'skipped', reason: 'url-not-payroll', url };
+    log(`   skip: route "${route.name}" pattern has no {capture} for the workspace key`);
+    return { status: 'skipped', reason: 'no-workspace-key', route: route.name };
   }
   try {
-    const target = await resolveTarget(key);
+    const target = await resolveTarget(key, route.tabName, route.paneName);
     if (!target.ok) {
-      log(`   skip: no herdr target for "${key}" (${target.reason})`);
-      return { status: 'unresolved', ...target };
+      log(`   skip: route "${route.name}" → no target for "${key}" (${target.reason})`);
+      return { status: 'unresolved', route: route.name, ...target };
     }
     if (dryRun) {
-      log(`   dry-run: would deliver to ${target.workspaceLabel} ${target.paneId} (${cfg.HERDR_TAB}/${cfg.HERDR_PANE})`);
-      return { status: 'resolved', ...target };
+      log(`   dry-run: route "${route.name}" → ${target.workspaceLabel} ${target.paneId} (${target.tabName}/${target.paneName})`);
+      return { status: 'resolved', route: route.name, ...target };
     }
     const d = await deliver(target.paneId, text, { submit });
-    log(`   delivered to ${target.workspaceLabel} ${target.paneId}${submit ? ' + Enter' : ' (no submit)'}`);
-    return { status: 'delivered', ...target, ...d };
+    log(`   delivered via "${route.name}" to ${target.workspaceLabel} ${target.paneId}${submit ? ' + Enter' : ' (no submit)'}`);
+    return { status: 'delivered', route: route.name, ...target, ...d };
   } catch (err) {
     log(`   delivery error for "${key}": ${err.message}`);
     return { status: 'error', key, error: err.message };
@@ -275,6 +285,7 @@ const server = http.createServer(async (req, res) => {
       // Partial merge — extension pushes whatever settings it owns.
       const b = await readBody(req);
       if (typeof b.requireBrowserFocus === 'boolean') config.requireBrowserFocus = b.requireBrowserFocus;
+      if (Array.isArray(b.routes)) config.routes = b.routes;
       return send(res, 200, { ok: true, config });
     }
 

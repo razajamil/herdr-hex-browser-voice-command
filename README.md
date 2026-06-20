@@ -12,21 +12,27 @@ Chrome extension ──HTTP──▶ local daemon ──watches──▶ Hex tra
    tab URL over time)            └── maps payroll URL → herdr workspace → tab `main` → pane `agent`, delivers transcript
 ```
 
-## Routing rule
+## Routing rules
 
-A recording is delivered **only** if the tab it's attributed to is a payroll local dev
-server inside a worktree:
+Routing is driven by a list of **rules configured in the extension** (Manage routes…) and
+pushed to the daemon via `POST /config`. Each rule is:
 
+```jsonc
+{ "name": "Payroll dev",
+  "urlPattern": "http://{workspace}.payroll.localhost/*",
+  "tabName": "main",
+  "paneName": "agent" }
 ```
-http://rwr-<number>-<short-description>.payroll.localhost/...
-        └──────────── worktree key ────────────┘
-```
 
-The daemon then finds the herdr **workspace** whose label / worktree folder matches that
-key (tolerant of a `fix-`/`feat-` prefix, e.g. URL `rwr-1234-heardroom` →
-workspace `fix-rwr-1234-heardroom`), locates its tab labelled **`main`** and the pane
-labelled **`agent`**, and types the transcript there + Enter. Any other URL is ignored.
-Target tab/pane names are in `daemon/config.js` (`HERDR_TAB`, `HERDR_PANE`).
+For each recording the daemon takes the attributed URL, tries the rules **in order**, and
+the first whose `urlPattern` matches wins. URLs matching no rule are ignored.
+
+**Pattern syntax:** `*` matches anything; `{workspace}` captures the part used to find the
+herdr workspace. The captured key is matched against each workspace's label / worktree
+folder name, tolerant of a `fix-`/`feat-` prefix (e.g. `rwr-1234-heardroom` →
+`fix-rwr-1234-heardroom`). The daemon then locates that workspace's tab `tabName` and pane
+`paneName`, and types the transcript there + Enter. (`DEFAULT_TAB`/`DEFAULT_PANE` in
+`daemon/config.js` are fallbacks when a rule omits them.)
 
 The extension can't read files or run CLIs (sandbox), so a small **local daemon** does the
 real work. The daemon **watches Hex's transcript file**; when a new transcript appears it
@@ -42,10 +48,11 @@ attributes it to whichever browser URL was active during the recording's time wi
 
 ```
 extension/        Chrome MV3 extension (load unpacked)
-  manifest.json   tabs + alarms perms, host_permission for 127.0.0.1:8137
-  background.js   streams active-tab URL, health-checks daemon, sets badge
+  manifest.json   tabs + alarms + storage perms, host_permission for 127.0.0.1:8137
+  background.js   streams active-tab URL + window focus, syncs settings, health badge
   content.js      OPTIONAL: detects ⌘-double-tap (start) / Escape (abort) as hints
-  popup.html/js   status panel
+  popup.html/js   status panel + focus toggle + "Manage routes" button
+  options.html/js routes editor (list of url-pattern → tab/pane rules)
 daemon/           Node HTTP service (zero npm deps)
   server.js       endpoints + transcript watcher + routing stub
   hex.js          reads/normalizes Hex history
@@ -86,6 +93,9 @@ Toggles live in the popup and are mirrored to the daemon as config:
   Chrome wasn't frontmost when the recording started. Turn off to route even when Chrome
   is in the background. Enforced in the daemon via a focus timeline the extension streams
   to `POST /focus`; the setting itself syncs via `POST /config`.
+- **Routes** (popup → *Manage routes…* → options page) — the list of url-pattern → tab/pane
+  rules described above. Stored in `chrome.storage.local` and pushed to the daemon via
+  `POST /config` on save, on startup, and on every health tick.
 
 ## Tuning / calibration
 

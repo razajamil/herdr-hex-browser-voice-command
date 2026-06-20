@@ -1,0 +1,48 @@
+<meta charset="utf-8" />
+<title>Voice Router — Routes</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 -apple-system, system-ui, sans-serif; max-width: 720px; margin: 0 auto; padding: 28px 20px 60px; color: #1f2328; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #57606a; margin: 0 0 20px; }
+  .route { border: 1px solid #d0d7de; border-radius: 8px; padding: 14px; margin-bottom: 14px; background: #fbfcfd; }
+  .route-head { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+  .route-head .f-name { flex: 1; font-weight: 600; }
+  label { display: block; font-size: 12px; color: #57606a; margin-bottom: 10px; }
+  label:last-child { margin-bottom: 0; }
+  input[type=text] { width: 100%; box-sizing: border-box; margin-top: 3px; padding: 7px 9px; border: 1px solid #d0d7de; border-radius: 6px; font: inherit; font-size: 13px; }
+  .two { display: flex; gap: 12px; }
+  .two label { flex: 1; }
+  .del { border: 1px solid #d0d7de; background: #fff; border-radius: 6px; width: 30px; height: 30px; cursor: pointer; color: #cf222e; font-size: 14px; line-height: 1; }
+  .del:hover { background: #ffebe9; }
+  .bar { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
+  button.primary { background: #1f883d; color: #fff; border: 0; border-radius: 6px; padding: 8px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+  button.ghost { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 8px 14px; font: inherit; cursor: pointer; }
+  .saved { color: #1a7f37; font-size: 13px; opacity: 0; transition: opacity .15s; }
+  .saved.show { opacity: 1; }
+  .help { margin-top: 22px; padding: 12px 14px; background: #f6f8fa; border-radius: 8px; font-size: 12.5px; color: #424a53; }
+  .help code { background: #eaeef2; padding: 1px 5px; border-radius: 4px; }
+  .empty { color: #8c959f; padding: 16px 0; }
+</style>
+
+<h1>Voice Router — Routes</h1>
+<p class="sub">Each rule matches a browser URL and sends your voice transcript to a herdr tab/pane. The first matching rule wins.</p>
+
+<div id="routes"></div>
+
+<div class="bar">
+  <button id="add" class="ghost">+ Add route</button>
+  <button id="save" class="primary">Save</button>
+  <span id="saved" class="saved">Saved ✓</span>
+</div>
+
+<div class="help">
+  <strong>URL pattern syntax</strong> — <code>*</code> matches anything;
+  <code>{workspace}</code> captures the part used to find the herdr workspace (matched against
+  workspace label / worktree folder, tolerant of a <code>fix-</code>/<code>feat-</code> prefix).<br />
+  Example: <code>http://{workspace}.payroll.localhost/*</code> on
+  <code>http://rwr-1234-heardroom.payroll.localhost/v2</code> → workspace key
+  <code>rwr-1234-heardroom</code>, delivered to tab <em>main</em> / pane <em>agent</em>.
+</div>
+
+<script src="options.js"></script>

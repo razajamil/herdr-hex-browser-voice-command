@@ -49,12 +49,9 @@ module.exports = {
   HERDR_BIN: process.env.VOICEROUTER_HERDR_BIN || 'herdr',
   HERDR_TIMEOUT_MS: 8000,
 
-  // Delivery target within the matched workspace (literal for now; config-driven later).
-  HERDR_TAB: 'main',
-  HERDR_PANE: 'agent',
-
-  // Gate: only route tabs whose URL is a payroll local dev server living in a worktree,
-  // e.g. http://rwr-1234-heardroom.payroll.localhost/v2 . Capture group 1 is the worktree
-  // key (rwr-<number>-<short-description>) used to find the herdr workspace.
-  PAYROLL_URL_RE: /^https?:\/\/(rwr-\d+-[a-z0-9-]+)\.payroll\.localhost(?:[:/]|$)/i,
+  // Routing rules (URL pattern → tab/pane) are configured in the Chrome extension and
+  // pushed via POST /config (see daemon/server.js `config.routes`). These are only
+  // fallbacks: used when a rule omits a tab/pane name.
+  DEFAULT_TAB: 'main',
+  DEFAULT_PANE: 'agent',
 };

@@ -43,6 +43,7 @@ async function load() {
   html += row('URL timeline', h.timelineSize);
   html += row('Current URL', shortUrl(h.currentUrl));
   html += row('Browser focused', h.browserFocused === null ? 'unknown' : h.browserFocused ? 'yes' : 'no');
+  html += row('Routes', h.config && Array.isArray(h.config.routes) ? h.config.routes.length : '—');
 
   if (h.lastMatch) {
     html +=
@@ -73,5 +74,7 @@ reqFocusEl.addEventListener('change', async () => {
     settings: { ...(settings || {}), requireBrowserFocus: reqFocusEl.checked },
   });
 });
+
+document.getElementById('manageRoutes').addEventListener('click', () => chrome.runtime.openOptionsPage());
 
 loadSettings();

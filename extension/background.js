@@ -24,7 +24,12 @@ async function post(path, body) {
 }
 
 // ---- settings (mirrored to the daemon as config) ----
-const DEFAULT_SETTINGS = { requireBrowserFocus: true };
+const DEFAULT_SETTINGS = {
+  requireBrowserFocus: true,
+  routes: [
+    { name: 'Payroll dev', urlPattern: 'http://{workspace}.payroll.localhost/*', tabName: 'main', paneName: 'agent' },
+  ],
+};
 
 async function getSettings() {
   const { settings } = await chrome.storage.local.get('settings');
@@ -33,7 +38,7 @@ async function getSettings() {
 
 async function pushConfig() {
   const s = await getSettings();
-  await post('/config', { requireBrowserFocus: s.requireBrowserFocus });
+  await post('/config', { requireBrowserFocus: s.requireBrowserFocus, routes: s.routes });
 }
 
 async function reportFocus(focused) {

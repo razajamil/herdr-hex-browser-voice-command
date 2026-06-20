@@ -25,14 +25,53 @@ function run(args, { json = true } = {}) {
   });
 }
 
-// http://rwr-1234-heardroom.payroll.localhost/v2 -> "rwr-1234-heardroom"
-function payrollKeyFromUrl(rawUrl) {
-  if (!rawUrl) return null;
-  const m = cfg.PAYROLL_URL_RE.exec(rawUrl);
-  return m ? m[1].toLowerCase() : null;
+// ---- URL pattern matching ----
+// Patterns (authored in the extension) use two tokens:
+//   *        wildcard — matches anything
+//   {name}   capture — matches one dot/slash-free segment; the FIRST capture is the
+//            herdr workspace key.
+// e.g. "http://{workspace}.payroll.localhost/*" applied to
+//      "http://rwr-1234-heardroom.payroll.localhost/v2" captures "rwr-1234-heardroom".
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Names a workspace can be matched by: its label and its worktree folder name.
+function compilePattern(pattern) {
+  let out = '^';
+  const token = /\{[A-Za-z0-9_]+\}|\*/g;
+  let last = 0;
+  let m;
+  while ((m = token.exec(pattern))) {
+    out += escapeRegex(pattern.slice(last, m.index));
+    out += m[0] === '*' ? '.*' : '([^/.]+)';
+    last = m.index + m[0].length;
+  }
+  out += escapeRegex(pattern.slice(last));
+  // If the pattern doesn't end in a wildcard, only allow the URL to continue past a
+  // path/port/query boundary — so "…localhost" can't match "…localhostevil.com".
+  if (!pattern.endsWith('*')) out += '(?:[/:?#].*)?$';
+  return new RegExp(out, 'i');
+}
+
+// First route whose urlPattern matches `url`. Returns { route, key } or null.
+function matchRoute(url, routes) {
+  if (!url || !Array.isArray(routes)) return null;
+  for (const route of routes) {
+    if (!route || !route.urlPattern) continue;
+    let regex;
+    try {
+      regex = compilePattern(route.urlPattern);
+    } catch (_e) {
+      continue; // skip a malformed pattern rather than crash routing
+    }
+    const m = regex.exec(url);
+    if (!m) continue;
+    return { route, key: (m[1] || '').toLowerCase() };
+  }
+  return null;
+}
+
+// ---- workspace / tab / pane resolution ----
 function workspaceNames(ws) {
   const names = [];
   if (ws.label) names.push(ws.label);
@@ -60,8 +99,11 @@ function pickWorkspace(workspaces, key) {
   return best; // { ws, tier, name } | null
 }
 
-// key -> { ok, paneId, ... } by walking workspace -> tab(main) -> pane(agent).
-async function resolveTarget(key) {
+// key + target labels -> { ok, paneId, ... }.
+async function resolveTarget(key, tabName, paneName) {
+  const wantTab = tabName || cfg.DEFAULT_TAB;
+  const wantPane = paneName || cfg.DEFAULT_PANE;
+
   const wl = await run(['workspace', 'list']);
   const workspaces = (wl.result && wl.result.workspaces) || [];
   const hit = pickWorkspace(workspaces, key);
@@ -70,16 +112,16 @@ async function resolveTarget(key) {
 
   const tl = await run(['tab', 'list', '--workspace', ws.workspace_id]);
   const tabs = (tl.result && tl.result.tabs) || [];
-  const tab = tabs.find((t) => t.label === cfg.HERDR_TAB);
-  if (!tab) return { ok: false, reason: 'no-tab', key, workspaceLabel: ws.label, want: cfg.HERDR_TAB };
+  const tab = tabs.find((t) => t.label === wantTab);
+  if (!tab) return { ok: false, reason: 'no-tab', key, workspaceLabel: ws.label, want: wantTab };
 
   const pl = await run(['pane', 'list']);
   const panes = (pl.result && pl.result.panes) || [];
   const pane = panes.find(
-    (p) => p.workspace_id === ws.workspace_id && p.tab_id === tab.tab_id && p.label === cfg.HERDR_PANE
+    (p) => p.workspace_id === ws.workspace_id && p.tab_id === tab.tab_id && p.label === wantPane
   );
   if (!pane) {
-    return { ok: false, reason: 'no-pane', key, workspaceLabel: ws.label, tab: tab.label, want: cfg.HERDR_PANE };
+    return { ok: false, reason: 'no-pane', key, workspaceLabel: ws.label, tab: tab.label, want: wantPane };
   }
 
   return {
@@ -90,7 +132,9 @@ async function resolveTarget(key) {
     workspaceId: ws.workspace_id,
     workspaceLabel: ws.label,
     tabId: tab.tab_id,
+    tabName: wantTab,
     paneId: pane.pane_id,
+    paneName: wantPane,
   };
 }
 
@@ -104,4 +148,4 @@ async function deliver(paneId, text, { submit = true } = {}) {
   return { submitted: submit, chars: oneLine.length };
 }
 
-module.exports = { run, payrollKeyFromUrl, pickWorkspace, resolveTarget, deliver };
+module.exports = { run, compilePattern, matchRoute, pickWorkspace, resolveTarget, deliver };

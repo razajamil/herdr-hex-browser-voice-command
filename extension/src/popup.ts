@@ -22,6 +22,12 @@ function shortUrl(u: string | null | undefined): string | null {
     return esc(u);
   }
 }
+function ago(ts: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m}m ago` : `${Math.round(m / 60)}h ago`;
+}
 
 async function load(): Promise<void> {
   let h: any;
@@ -52,9 +58,27 @@ async function load(): Promise<void> {
   html += row('Browser focused', h.browserFocused === null ? 'unknown' : h.browserFocused ? 'yes' : 'no');
   html += row('Routes', routeCount);
 
+  // Screenshot indicator (only when the feature is on). lastScreenshotAt = the daemon
+  // actually received a shot (true end-to-end); the extension's own status surfaces the
+  // capture error when nothing is getting through.
+  if (h.config?.attachScreenshot) {
+    const shotStatus = (await chrome.storage.local.get('screenshotStatus')).screenshotStatus as
+      | { ok: boolean; ts: number; error?: string }
+      | undefined;
+    let v: string;
+    if (h.lastScreenshotAt) v = `${ago(h.lastScreenshotAt)} · ${h.screenshotCount} buffered`;
+    else if (shotStatus && !shotStatus.ok) v = '<span style="color:#cf222e">capture failing</span>';
+    else v = '<span class="muted">none yet</span>';
+    html += row('Screenshots', v);
+    if (!h.lastScreenshotAt && shotStatus && !shotStatus.ok && shotStatus.error) {
+      html += `<div class="card" style="color:#cf222e">${esc(shotStatus.error)}</div>`;
+    }
+  }
+
   if (h.lastMatch) {
+    const shot = h.lastMatch.screenshot ? ' <span title="screenshot attached">📷</span>' : '';
     html +=
-      `<div class="card"><div class="k" style="margin-bottom:4px">last routed → ${shortUrl(h.lastMatch.url) || '(no url)'}</div>` +
+      `<div class="card"><div class="k" style="margin-bottom:4px">last routed → ${shortUrl(h.lastMatch.url) || '(no url)'}${shot}</div>` +
       `<div>"${esc(h.lastMatch.textPreview)}"</div></div>`;
   } else {
     html += '<div class="card muted">no recordings routed yet</div>';
@@ -67,16 +91,25 @@ load();
 
 // ---- settings ----
 const reqFocusEl = document.getElementById('requireFocus') as HTMLInputElement;
+const attachShotEl = document.getElementById('attachScreenshot') as HTMLInputElement;
 
 async function loadSettings(): Promise<void> {
   const stored = (await chrome.storage.local.get('settings')).settings as Partial<Config> | undefined;
   reqFocusEl.checked = stored ? stored.requireBrowserFocus !== false : true;
+  attachShotEl.checked = !!stored?.attachScreenshot;
 }
 
 reqFocusEl.addEventListener('change', async () => {
   const { settings } = await chrome.storage.local.get('settings');
   await chrome.storage.local.set({
     settings: { ...(settings ?? {}), requireBrowserFocus: reqFocusEl.checked },
+  });
+});
+
+attachShotEl.addEventListener('change', async () => {
+  const { settings } = await chrome.storage.local.get('settings');
+  await chrome.storage.local.set({
+    settings: { ...(settings ?? {}), attachScreenshot: attachShotEl.checked },
   });
 });
 

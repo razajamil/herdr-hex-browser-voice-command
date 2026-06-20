@@ -16,7 +16,7 @@ matches your current browser context.
 | Component | Tech | Role |
 |---|---|---|
 | **Hex** | macOS app (external) | Voice→text. Writes each transcript to `transcription_history.json` in its sandbox container. We only *read* this file. |
-| **Chrome extension** | MV3 (TypeScript→esbuild) | A *sensor*: streams the active tab's URL + window-focus state to the daemon, holds user settings, shows status. Makes **no routing decisions**. |
+| **Chrome extension** | MV3 (TypeScript→esbuild) | A *sensor*: streams the active tab's URL + window-focus state (and, optionally, a screenshot of the tab) to the daemon, holds user settings, shows status. Makes **no routing decisions**. |
 | **voicerouter daemon** | Node (TypeScript→esbuild), launchd agent | The *brain*: watches Hex's file, matches each new transcript to a URL + routing rule, and delivers it via the herdr CLI. |
 | **herdr** | CLI multiplexer (external) | Hosts the workspaces/tabs/panes where Claude Code agents run. Driven over its local unix socket. |
 
@@ -120,6 +120,25 @@ For each new transcript the daemon, in `route()` / `deliverToHerdr()`:
 
 URLs matching no rule, or recordings made while unfocused (when gated), are dropped.
 
+## Optional: page screenshots
+
+When `attachScreenshot` is on, the agent gets to *see* the page you were looking at, not
+just its URL. A terminal can't receive an image, so we hand Claude Code a **file path** and
+let it read the image itself:
+
+1. **Capture** — the extension grabs the visible tab (`chrome.tabs.captureVisibleTab`, JPEG)
+   on the same tab-activate / focus / load events that already report the URL (throttled),
+   and POSTs the data URL to `/screenshot`. Off by default; zero capture cost until enabled.
+2. **Store** — the daemon writes each shot to a file under `SCREENSHOT_DIR` and keeps a
+   small time-indexed timeline of *paths* (not pixels), pruned by count + TTL.
+3. **Attribute** — at route time it picks the shot active at the recording *start* (mirroring
+   the URL timeline), discarding one too stale to be the page in question.
+4. **Reference** — it prepends `Screenshot of my current browser tab (read this image file):
+   <path>` to the transcript before delivery. Claude Code opens the image when it runs.
+
+This needs the `http://*/*` + `https://*/*` host permissions (for `captureVisibleTab`), and
+`SCREENSHOT_DIR` must be readable by the agent process (it runs as the same user).
+
 ## Interfaces
 
 **Hex store** (read-only, live-verified):
@@ -132,6 +151,7 @@ URLs matching no rule, or recordings made while unfocused (when gated), are drop
 |---|---|---|
 | GET | `/health` | status, transcript count, current URL, focus, config, last match |
 | POST | `/active-url` | extension → URL timeline |
+| POST | `/screenshot` | extension → screenshot store (data URL → file on disk; opt-in) |
 | POST | `/focus` | extension → focus timeline |
 | POST | `/config` | extension → settings (Zod-validated; 400 on bad input) |
 | POST | `/recording` | optional gesture hints (start/finish/abort) |
@@ -139,8 +159,9 @@ URLs matching no rule, or recordings made while unfocused (when gated), are drop
 | POST | `/route-test` | debug: run gate→resolve→deliver for a URL (dry-run by default) |
 | GET | `/transcripts/latest` | debug peek |
 
-**chrome.storage.local** — `settings: { requireBrowserFocus, routes[] }`. The extension is
-the source of truth; it pushes to `/config` on startup, on change, and each health tick.
+**chrome.storage.local** — `settings: { requireBrowserFocus, attachScreenshot, routes[] }`.
+The extension is the source of truth; it pushes to `/config` on startup, on change, and each
+health tick.
 
 **herdr** — controlled via the `herdr` CLI over `~/.config/herdr/herdr.sock` (works from
 outside herdr because every call targets explicit ids).
@@ -170,10 +191,11 @@ daemon/src/
   server.ts                 HTTP API, timelines, watcher, route(), boot
   hex.ts                    read/normalize transcription_history.json
   matcher.ts                URL-for-transcript + explicit-window matchers
+  screenshots.ts            optional page-screenshot store (data URL → file, attribution)
   herdr.ts                  CLI wrapper, URL-pattern compiler, workspace/tab/pane resolve
   config.ts                 ports, paths, tunables
 extension/src/
-  background.ts             URL/focus streaming, config sync, health badge
+  background.ts             URL/focus + optional screenshot streaming, config sync, health badge
   content.ts                optional ⌘-double / Esc gesture detection
   popup.ts / options.ts     status + focus toggle / routes editor
 build.mjs · tsconfig*.json · install.sh · uninstall.sh

@@ -22,6 +22,7 @@ async function post(p: string, body: unknown): Promise<boolean> {
 // ---- settings (validated, then mirrored to the daemon as config) ----
 const DEFAULT_SETTINGS: Config = {
   requireBrowserFocus: true,
+  attachScreenshot: false,
   routes: [
     { name: 'Payroll dev', urlPattern: 'http://{workspace}.payroll.localhost/*', tabName: 'main', paneName: 'agent' },
   ],
@@ -36,7 +37,7 @@ async function getSettings(): Promise<Config> {
 
 async function pushConfig(): Promise<void> {
   const s = await getSettings();
-  await post('/config', { requireBrowserFocus: s.requireBrowserFocus, routes: s.routes });
+  await post('/config', { requireBrowserFocus: s.requireBrowserFocus, attachScreenshot: s.attachScreenshot, routes: s.routes });
 }
 
 async function reportFocus(focused: boolean): Promise<void> {
@@ -50,6 +51,43 @@ function isTrackable(url: string | undefined): url is string {
 async function reportTab(tab: chrome.tabs.Tab | undefined): Promise<void> {
   if (!tab || !isTrackable(tab.url)) return;
   await post('/active-url', { url: tab.url, tabId: tab.id, title: tab.title || null, ts: Date.now() });
+  void maybeCaptureScreenshot(tab);
+}
+
+// When the screenshot feature is on, capture the visible tab and stream it to the daemon.
+// Piggybacks on the same tab-activate / focus / load events that report the URL, throttled
+// so a burst of onUpdated events during a page load doesn't spam captures.
+const SHOT_MIN_INTERVAL_MS = 600;
+let lastShotAt = 0;
+
+async function maybeCaptureScreenshot(tab: chrome.tabs.Tab): Promise<void> {
+  if (!isTrackable(tab.url) || !tab.active) return; // captureVisibleTab grabs the ACTIVE tab
+  const s = await getSettings();
+  if (!s.attachScreenshot) return;
+  const now = Date.now();
+  if (now - lastShotAt < SHOT_MIN_INTERVAL_MS) return;
+  lastShotAt = now;
+  try {
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 55 });
+    await post('/screenshot', { dataUrl, url: tab.url, tabId: tab.id, ts: now });
+    await setShotStatus({ ok: true, ts: now });
+  } catch (e) {
+    // Protected page (chrome://, web store), window not focused, rate-limited, or host
+    // access withheld. Log (service-worker console) + record so the popup can show why.
+    const error = (e as Error)?.message ?? String(e);
+    console.warn('[voice-router] captureVisibleTab failed:', error);
+    await setShotStatus({ ok: false, ts: now, error });
+  }
+}
+
+// Last capture outcome, mirrored to storage so the popup (a separate context) can read it.
+// Kept on a dedicated key so the settings onChanged listener (which gates on `changes.settings`) ignores it.
+async function setShotStatus(s: { ok: boolean; ts: number; error?: string }): Promise<void> {
+  try {
+    await chrome.storage.local.set({ screenshotStatus: s });
+  } catch {
+    /* ignore */
+  }
 }
 
 async function reportActive(): Promise<void> {

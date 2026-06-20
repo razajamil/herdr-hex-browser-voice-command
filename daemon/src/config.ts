@@ -46,4 +46,15 @@ export const cfg = {
   // Fallbacks used only when a route omits a tab/pane name (routes come from the extension).
   DEFAULT_TAB: 'main',
   DEFAULT_PANE: 'agent',
+
+  // ---- optional page screenshots ----
+  // Where the active-tab screenshots posted by the extension are written. Claude Code
+  // reads these by path, so they must live somewhere the agent process can read.
+  SCREENSHOT_DIR: process.env.VOICEROUTER_SCREENSHOT_DIR || path.join(os.tmpdir(), 'voicerouter-screenshots'),
+  // Ring-buffer retention for screenshots (kept small; each is a file on disk).
+  SCREENSHOT_MAX: 12,
+  SCREENSHOT_TTL_MS: 5 * 60 * 1000,
+  // Don't attach a shot whose capture time is further than this from the recording start —
+  // it almost certainly wasn't the page the user was looking at when they spoke.
+  SCREENSHOT_MAX_AGE_MS: 10 * 60 * 1000,
 };

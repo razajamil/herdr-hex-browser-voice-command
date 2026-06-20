@@ -14,6 +14,7 @@ import type { Transcript } from './hex';
 import { selectUrlForTranscript, matchTranscriptByWindow } from './matcher';
 import type { UrlEntry } from './matcher';
 import { matchRoute, resolveTarget, deliver } from './herdr';
+import { saveScreenshot, selectScreenshot, screenshotCount, lastScreenshotAt } from './screenshots';
 import { ConfigSchema, type Route } from '../../shared/config-schema';
 
 const startedAt = Date.now();
@@ -45,8 +46,9 @@ let pendingBracket: PendingBracket | null = null;
 
 // Settings synced from the extension (extension is the source of truth). Defaults are
 // permissive so behavior is unchanged before an extension connects.
-const config: { requireBrowserFocus: boolean; routes: Route[] } = {
+const config: { requireBrowserFocus: boolean; attachScreenshot: boolean; routes: Route[] } = {
   requireBrowserFocus: false,
+  attachScreenshot: false,
   routes: [
     { name: 'Payroll dev', urlPattern: 'http://{workspace}.payroll.localhost/*', tabName: 'main', paneName: 'agent' },
   ],
@@ -131,7 +133,21 @@ async function route(transcript: Transcript, urlEntry: UrlEntry | null, meta: Ro
     if (focused === null) log('   note: focus state unknown at recording time; routing anyway');
   }
 
-  match.delivery = await deliverToHerdr(url, transcript.text, { submit: true });
+  // Optionally reference a screenshot of the page the user was looking at when they spoke.
+  // We can't paste an image into a terminal, so we hand the agent a file PATH to read.
+  let text = transcript.text;
+  if (config.attachScreenshot) {
+    const shot = selectScreenshot(transcript.startUnixMs ?? Date.now());
+    if (shot) {
+      text = `Screenshot of my current browser tab (read this image file): ${shot.path}\n\n${transcript.text}`;
+      match.screenshot = shot.path;
+      log(`   attached screenshot ${shot.path}`);
+    } else {
+      log('   note: attachScreenshot on, but no recent screenshot to attach');
+    }
+  }
+
+  match.delivery = await deliverToHerdr(url, text, { submit: true });
 }
 
 // Match the URL against the configured routes, resolve the herdr pane, deliver. Shared by
@@ -255,6 +271,8 @@ const server = http.createServer(async (req, res) => {
         hexHistoryReadable: hist.ok,
         transcriptCount: hist.transcripts.length,
         timelineSize: urlTimeline.length,
+        screenshotCount: screenshotCount(),
+        lastScreenshotAt: lastScreenshotAt(),
         currentUrl: urlTimeline.length ? urlTimeline[urlTimeline.length - 1].url : null,
         browserFocused: focusTimeline.length ? focusTimeline[focusTimeline.length - 1].focused : null,
         config,
@@ -268,7 +286,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, {
         service: 'voicerouter',
         version: cfg.VERSION,
-        endpoints: ['GET /health', 'POST /active-url', 'POST /focus', 'POST /config', 'POST /recording', 'POST /match', 'POST /route-test', 'GET /transcripts/latest'],
+        endpoints: ['GET /health', 'POST /active-url', 'POST /screenshot', 'POST /focus', 'POST /config', 'POST /recording', 'POST /match', 'POST /route-test', 'GET /transcripts/latest'],
       });
     }
 
@@ -298,6 +316,22 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, timelineSize: urlTimeline.length });
     }
 
+    if (key === 'POST /screenshot') {
+      const b = await readBody(req);
+      if (typeof b.dataUrl !== 'string') return send(res, 400, { ok: false, error: 'dataUrl required' });
+      try {
+        const entry = saveScreenshot({
+          ts: Number(b.ts) || Date.now(),
+          url: typeof b.url === 'string' ? b.url : null,
+          tabId: typeof b.tabId === 'number' ? b.tabId : null,
+          dataUrl: b.dataUrl,
+        });
+        return send(res, 200, { ok: true, path: entry.path, count: screenshotCount() });
+      } catch (err) {
+        return send(res, 400, { ok: false, error: (err as Error).message });
+      }
+    }
+
     if (key === 'POST /focus') {
       const b = await readBody(req);
       focusTimeline.push({ ts: Number(b.ts) || Date.now(), focused: !!b.focused });
@@ -312,6 +346,7 @@ const server = http.createServer(async (req, res) => {
       }
       // Partial merge: only overwrite keys that were actually provided.
       if (parsed.data.requireBrowserFocus !== undefined) config.requireBrowserFocus = parsed.data.requireBrowserFocus;
+      if (parsed.data.attachScreenshot !== undefined) config.attachScreenshot = parsed.data.attachScreenshot;
       if (parsed.data.routes !== undefined) config.routes = parsed.data.routes;
       return send(res, 200, { ok: true, config });
     }

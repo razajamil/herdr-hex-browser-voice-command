@@ -13,6 +13,9 @@ export const RouteSchema = z.object({
 
 export const ConfigSchema = z.object({
   requireBrowserFocus: z.boolean().optional(),
+  // When on, the extension streams the active tab's screenshot and the daemon references
+  // its file path in the delivered prompt so the agent can read the page.
+  attachScreenshot: z.boolean().optional(),
   routes: z.array(RouteSchema).optional(),
 });
 

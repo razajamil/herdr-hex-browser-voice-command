@@ -4,7 +4,9 @@
 import { execFile } from 'child_process';
 import path from 'path';
 import { cfg } from './config';
-import type { Route } from '../../shared/config-schema';
+
+// URL-pattern matching lives in shared/ so the extension popup uses the exact same matcher.
+export { compilePattern, matchRoute } from '../../shared/url-match';
 
 interface HerdrWorktree {
   checkout_path?: string;
@@ -61,51 +63,6 @@ async function tabList(workspaceId: string): Promise<HerdrTab[]> {
 async function paneList(): Promise<HerdrPane[]> {
   const out = (await run(['pane', 'list'])) as { result?: { panes?: HerdrPane[] } };
   return out.result?.panes ?? [];
-}
-
-// ---- URL pattern matching ----
-// `*` matches anything; `{name}` captures one dot/slash-free segment; the FIRST capture is
-// the herdr workspace key. e.g. "http://{workspace}.payroll.localhost/*" on
-// "http://rwr-1234-heardroom.payroll.localhost/v2" captures "rwr-1234-heardroom".
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-export function compilePattern(pattern: string): RegExp {
-  let out = '^';
-  const token = /\{[A-Za-z0-9_]+\}|\*/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = token.exec(pattern)) !== null) {
-    out += escapeRegex(pattern.slice(last, m.index));
-    out += m[0] === '*' ? '.*' : '([^/.]+)';
-    last = m.index + m[0].length;
-  }
-  out += escapeRegex(pattern.slice(last));
-  // No trailing wildcard → only continue past a path/port/query boundary, so "…localhost"
-  // can't match "…localhostevil.com".
-  if (!pattern.endsWith('*')) out += '(?:[/:?#].*)?$';
-  return new RegExp(out, 'i');
-}
-
-export function matchRoute(
-  url: string | null | undefined,
-  routes: Route[] | undefined
-): { route: Route; key: string } | null {
-  if (!url || !Array.isArray(routes)) return null;
-  for (const route of routes) {
-    if (!route || !route.urlPattern) continue;
-    let regex: RegExp;
-    try {
-      regex = compilePattern(route.urlPattern);
-    } catch {
-      continue; // skip a malformed pattern rather than crash routing
-    }
-    const m = regex.exec(url);
-    if (!m) continue;
-    return { route, key: (m[1] || '').toLowerCase() };
-  }
-  return null;
 }
 
 // ---- workspace / tab / pane resolution ----

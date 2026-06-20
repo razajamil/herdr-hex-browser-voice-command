@@ -1,37 +1,42 @@
 <meta charset="utf-8" />
 <style>
-  body { font: 13px/1.45 -apple-system, system-ui, sans-serif; width: 320px; margin: 0; padding: 12px; color: #1f2328; }
-  h1 { font-size: 13px; margin: 0 0 10px; display: flex; align-items: center; }
-  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; background: #cf222e; }
-  .dot.ok { background: #1a7f37; }
-  .row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; }
-  .k { color: #57606a; }
-  .v { font-weight: 600; text-align: right; word-break: break-all; }
-  .card { margin-top: 10px; padding: 9px; background: #f6f8fa; border-radius: 6px; }
+  body { font: 13px/1.45 -apple-system, system-ui, sans-serif; width: 300px; margin: 0; padding: 12px; color: #1f2328; }
+  h1 { font-size: 13px; margin: 0 0 10px; font-weight: 600; }
   .muted { color: #8c959f; }
   code { background: #eaeef2; padding: 1px 4px; border-radius: 4px; font-size: 11px; }
-  .settings { margin-top: 12px; padding-top: 10px; border-top: 1px solid #eaeef2; }
-  .opt { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+  .opt { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 3px 0; }
   .opt input { margin: 2px 0 0; }
   .opt .hint { color: #8c959f; font-size: 11px; margin-top: 2px; }
   .routes-btn { margin-top: 10px; width: 100%; padding: 7px; border: 1px solid #d0d7de; border-radius: 6px; background: #f6f8fa; font: inherit; font-size: 12px; cursor: pointer; }
   .routes-btn:hover { background: #eef1f4; }
+  .status { margin-top: 14px; padding-top: 10px; border-top: 1px solid #eaeef2; }
+  .status h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #8c959f; margin: 0 0 6px; font-weight: 600; }
+  .check { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+  .check .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: #8c959f; }
+  .check .dot.ok { background: #1a7f37; }
+  .check .dot.bad { background: #cf222e; }
+  .check .dot.warn { background: #9a6700; }
+  .check .label { color: #57606a; }
+  .check .val { margin-left: auto; font-weight: 600; text-align: right; word-break: break-all; }
+  .hintcard { margin-top: 8px; padding: 8px; background: #f6f8fa; border-radius: 6px; color: #8c959f; font-size: 11px; }
 </style>
-<h1><span id="dot" class="dot"></span><span id="status">checking…</span></h1>
-<div id="body" class="muted">—</div>
-<div class="settings">
-  <label class="opt">
-    <input type="checkbox" id="requireFocus" />
-    <span>Only route when this browser window is focused
-      <span class="hint">Off: routes even when Chrome is in the background.</span>
-    </span>
-  </label>
-  <label class="opt" style="margin-top:8px">
-    <input type="checkbox" id="attachScreenshot" />
-    <span>Attach a screenshot of the current tab
-      <span class="hint">Sends the page image alongside the prompt so the agent can see it.</span>
-    </span>
-  </label>
-  <button id="manageRoutes" class="routes-btn">Manage routes…</button>
+<h1>Voice Router</h1>
+<label class="opt">
+  <input type="checkbox" id="requireFocus" />
+  <span>Only route when this browser window is focused
+    <span class="hint">Off: routes even when Chrome is in the background.</span>
+  </span>
+</label>
+<label class="opt">
+  <input type="checkbox" id="attachScreenshot" />
+  <span>Attach a screenshot of the current tab
+    <span class="hint">Sends the page image alongside the prompt so the agent can see it.</span>
+  </span>
+</label>
+<button id="manageRoutes" class="routes-btn">Manage routes…</button>
+
+<div class="status">
+  <h2>Status</h2>
+  <div id="checks" class="muted">checking…</div>
 </div>
 <script src="dist/popup.js"></script>

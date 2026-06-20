@@ -70,23 +70,10 @@ async function maybeCaptureScreenshot(tab: chrome.tabs.Tab): Promise<void> {
   try {
     const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 55 });
     await post('/screenshot', { dataUrl, url: tab.url, tabId: tab.id, ts: now });
-    await setShotStatus({ ok: true, ts: now });
   } catch (e) {
     // Protected page (chrome://, web store), window not focused, rate-limited, or host
-    // access withheld. Log (service-worker console) + record so the popup can show why.
-    const error = (e as Error)?.message ?? String(e);
-    console.warn('[voice-router] captureVisibleTab failed:', error);
-    await setShotStatus({ ok: false, ts: now, error });
-  }
-}
-
-// Last capture outcome, mirrored to storage so the popup (a separate context) can read it.
-// Kept on a dedicated key so the settings onChanged listener (which gates on `changes.settings`) ignores it.
-async function setShotStatus(s: { ok: boolean; ts: number; error?: string }): Promise<void> {
-  try {
-    await chrome.storage.local.set({ screenshotStatus: s });
-  } catch {
-    /* ignore */
+    // access withheld. Log (visible in the service-worker console) rather than swallow.
+    console.warn('[voice-router] captureVisibleTab failed:', (e as Error)?.message ?? e);
   }
 }
 

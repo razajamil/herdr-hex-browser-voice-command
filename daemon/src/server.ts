@@ -286,7 +286,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, {
         service: 'voicerouter',
         version: cfg.VERSION,
-        endpoints: ['GET /health', 'POST /active-url', 'POST /screenshot', 'POST /focus', 'POST /config', 'POST /recording', 'POST /match', 'POST /route-test', 'GET /transcripts/latest'],
+        endpoints: ['GET /health', 'POST /active-url', 'POST /screenshot', 'POST /focus', 'POST /config', 'POST /recording', 'POST /match', 'POST /route-test', 'POST /send', 'GET /transcripts/latest'],
       });
     }
 
@@ -409,6 +409,22 @@ const server = http.createServer(async (req, res) => {
         submit: b.submit === true,
       });
       return send(res, 200, { ok: true, dryRun, result });
+    }
+
+    if (key === 'POST /send') {
+      // Deliver the latest screenshot to the pane matching `url`, no voice needed (the
+      // extension's Send button captures the annotated frame, then calls this). Independent
+      // of the requireBrowserFocus gate — it's an explicit user action.
+      const b = await readBody(req);
+      if (typeof b.url !== 'string') return send(res, 400, { ok: false, error: 'url required' });
+      const shot = selectScreenshot(Date.now());
+      if (!shot) return send(res, 200, { ok: false, reason: 'no-screenshot' });
+      const text = `Screenshot of my current browser tab (read this image file): ${shot.path}`;
+      const delivery = await deliverToHerdr(b.url, text, { submit: true });
+      lastMatch = { at: Date.now(), source: 'send-button', url: b.url, screenshot: shot.path, textPreview: '[screenshot sent]', delivery };
+      log(`SEND [button] -> ${b.url} (${delivery.status})`);
+      log(`   attached screenshot ${shot.path}`);
+      return send(res, 200, { ok: true, screenshot: shot.path, delivery });
     }
 
     return send(res, 404, { ok: false, error: 'not found' });

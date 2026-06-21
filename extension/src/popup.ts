@@ -109,3 +109,58 @@ attachShotEl.addEventListener('change', async () => {
 document.getElementById('manageRoutes')!.addEventListener('click', () => chrome.runtime.openOptionsPage());
 
 loadSettings();
+
+// ---- drawing mode (per-tab; lives in the content script) ----
+const drawBtn = document.getElementById('drawBtn') as HTMLButtonElement;
+
+async function activeTab(): Promise<chrome.tabs.Tab | null> {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    return tab ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function setDrawBtn(state: 'on' | 'off' | 'unavailable'): void {
+  drawBtn.disabled = state === 'unavailable';
+  drawBtn.classList.toggle('active', state === 'on');
+  drawBtn.textContent =
+    state === 'on' ? '■ Stop drawing' : state === 'off' ? '✏️ Draw on this page' : 'Drawing not available here';
+}
+
+async function refreshDrawBtn(): Promise<void> {
+  const tab = await activeTab();
+  if (!tab?.id || !(tab.url || '').startsWith('http')) return setDrawBtn('unavailable');
+  try {
+    const r = (await chrome.tabs.sendMessage(tab.id, { type: 'draw-query' })) as { drawing?: boolean } | undefined;
+    setDrawBtn(r?.drawing ? 'on' : 'off');
+  } catch {
+    // content script not present yet (page loaded before install/reload). Allow a try anyway.
+    setDrawBtn('off');
+  }
+}
+
+drawBtn.addEventListener('click', async () => {
+  const tab = await activeTab();
+  if (!tab?.id) return;
+  const turningOn = !drawBtn.classList.contains('active');
+  if (turningOn) {
+    // The annotation only reaches the agent if screenshots are attached — ensure it's on.
+    const { settings } = (await chrome.storage.local.get('settings')) as { settings?: Partial<Config> };
+    if (!settings?.attachScreenshot) {
+      await chrome.storage.local.set({ settings: { ...(settings ?? {}), attachScreenshot: true } });
+      attachShotEl.checked = true;
+    }
+  }
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: 'draw', on: turningOn });
+  } catch {
+    drawBtn.textContent = '↻ Reload the page, then draw';
+    return;
+  }
+  if (turningOn) window.close(); // get out of the way so the user can draw
+  else setDrawBtn('off');
+});
+
+refreshDrawBtn();

@@ -4,6 +4,10 @@
   h1 { font-size: 13px; margin: 0 0 10px; font-weight: 600; }
   .muted { color: #8c959f; }
   code { background: #eaeef2; padding: 1px 4px; border-radius: 4px; font-size: 11px; }
+  .draw-btn { width: 100%; padding: 9px; border: 1px solid #d0d7de; border-radius: 8px; background: #f6f8fa; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; margin-bottom: 12px; }
+  .draw-btn:hover:not(:disabled) { background: #eef1f4; }
+  .draw-btn.active { background: #ffebe9; border-color: #ff8182; color: #cf222e; }
+  .draw-btn:disabled { opacity: .5; cursor: default; }
   .opt { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 3px 0; }
   .opt input { margin: 2px 0 0; }
   .opt .hint { color: #8c959f; font-size: 11px; margin-top: 2px; }
@@ -21,6 +25,7 @@
   .hintcard { margin-top: 8px; padding: 8px; background: #f6f8fa; border-radius: 6px; color: #8c959f; font-size: 11px; }
 </style>
 <h1>Voice Router</h1>
+<button id="drawBtn" class="draw-btn" disabled>✏️ Draw on this page</button>
 <label class="opt">
   <input type="checkbox" id="requireFocus" />
   <span>Only route when this browser window is focused

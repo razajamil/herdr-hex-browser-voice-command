@@ -35,9 +35,9 @@ flowchart TB
 
     subgraph chrome["Google Chrome (sandboxed)"]
         direction TB
-        EXT_POP["popup + options<br/>focus toggle · routes editor"]
+        EXT_POP["popup + options<br/>toggles · draw · routes editor"]
         STORE[("chrome.storage.local<br/>settings")]
-        EXT_CS["content script (optional)<br/>⌘-double / Esc hints"]
+        EXT_CS["content script<br/>gestures + annotate overlay"]
         EXT_BG["background service worker<br/>tracks active tab + window focus"]
     end
 
@@ -65,7 +65,7 @@ flowchart TB
     EXT_POP <-->|"read / write"| STORE
     STORE -.->|onChanged| EXT_BG
     EXT_CS -.->|gesture msg| EXT_BG
-    EXT_BG -->|"POST /active-url · /focus · /config"| HTTP
+    EXT_BG -->|"POST /active-url · /focus · /config · /screenshot · /send"| HTTP
     HTTP --> STATE
     HEXJSON -->|new entry| WATCH
     WATCH --> ROUTE
@@ -98,6 +98,7 @@ sequenceDiagram
     Daemon->>Daemon: fs.watch fires → diff for new transcript id
     Daemon->>Daemon: pick URL active at recording start (URL timeline)
     Daemon->>Daemon: focus gate — was Chrome focused? (if requireBrowserFocus)
+    Daemon->>Daemon: attach screenshot active at start (if attachScreenshot)
     Daemon->>Daemon: matchRoute(url, config.routes) → workspace key
     Daemon->>Herdr: workspace/tab/pane list → resolve target pane
     Daemon->>Herdr: pane send-text "<transcript>" + send-keys Enter
@@ -136,8 +137,38 @@ let it read the image itself:
 4. **Reference** — it prepends `Screenshot of my current browser tab (read this image file):
    <path>` to the transcript before delivery. Claude Code opens the image when it runs.
 
-This needs the `http://*/*` + `https://*/*` host permissions (for `captureVisibleTab`), and
+This needs the `<all_urls>` host permission (required by `captureVisibleTab`), and
 `SCREENSHOT_DIR` must be readable by the agent process (it runs as the same user).
+
+## Optional: drawing on the page
+
+To make a prompt more precise ("make **this** bigger" + an arrow + a label), the content
+script overlays a transparent full-viewport `<canvas>` with three tools — a freehand **Pen**,
+a **Text** tool (click empty space to type; click an existing label to drag it), and a
+**Rectangle** tool (drag to draw; click a rect to select, then drag the body to move or a
+corner handle to resize). Everything is one item list on the canvas (text rasterized with
+`textBaseline='top'`; entry via a temporary `contentEditable` box; move/resize hit-test
+against measured bounds and corner handles). Because the canvas is part of the rendered
+viewport, the captured screenshot includes the annotations — no special compositing. The
+toolbar and the rect selection handles are hidden during capture so they stay out of the shot.
+Tools have keyboard shortcuts in draw mode (**P** pen, **T** text, **R** rect), shown as
+keycaps on the toolbar buttons; they're suppressed while typing in a text box.
+
+- **Toggle** — the popup's "Draw on this page" button messages the active tab's content
+  script (`{type:'draw', on}`); enabling it also flips `attachScreenshot` on (else the
+  annotation reaches no one). Per-tab, transient (resets on navigation).
+- **Capture timing** — the ⌘⌘ gesture can't be relied on (the target app iframes its
+  content, so keyboard events never reach the content script). So the annotated frame is
+  captured on **stroke-pause** (debounced after you draw / type / move / resize — pointer-
+  driven, always reliable) and on Send; the background does the actual `captureVisibleTab`.
+- **Lifecycle / clear-on-send** — annotations persist until you exit (the **Cancel** button
+  or the popup toggle — deliberately *not* `Esc`, which is too easy to hit) or a voice command
+  is sent. Because the gesture is unreliable, clearing after a sent command is driven by the
+  background **watching the daemon's `lastMatch`** while a tab is in draw mode: a new routed
+  transcript → it messages the tab to clear + exit.
+- **Send button** — delivers the annotated screenshot to the matching pane immediately
+  (no voice) via `POST /send`: the toolbar hides, the background captures + delivers, and on
+  success the drawing clears and exits (failures flash the reason in the toolbar).
 
 ## Interfaces
 
@@ -149,7 +180,7 @@ This needs the `http://*/*` + `https://*/*` host permissions (for `captureVisibl
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/health` | status, transcript count, current URL, focus, config, last match |
+| GET | `/health` | status, transcript + screenshot counts, current URL, focus, config, last match |
 | POST | `/active-url` | extension → URL timeline |
 | POST | `/screenshot` | extension → screenshot store (data URL → file on disk; opt-in) |
 | POST | `/focus` | extension → focus timeline |
@@ -157,6 +188,7 @@ This needs the `http://*/*` + `https://*/*` host permissions (for `captureVisibl
 | POST | `/recording` | optional gesture hints (start/finish/abort) |
 | POST | `/match` | debug: best transcript for an explicit time window |
 | POST | `/route-test` | debug: run gate→resolve→deliver for a URL (dry-run by default) |
+| POST | `/send` | deliver the latest screenshot to the pane matching a URL, no voice (Send button) |
 | GET | `/transcripts/latest` | debug peek |
 
 **chrome.storage.local** — `settings: { requireBrowserFocus, attachScreenshot, routes[] }`.
@@ -172,7 +204,8 @@ The config exchanged between extension and daemon is validated by a **shared Zod
 (`shared/config-schema.ts`) — `ConfigSchema` / `RouteSchema`, with inferred TS types — so
 both sides agree on shape. Fields are optional to preserve the daemon's partial-merge.
 Defaults differ intentionally by call site: daemon `requireBrowserFocus=false` (permissive
-until the extension syncs), extension default `true`.
+until the extension syncs), extension default `true`. `attachScreenshot` (default off both
+sides) gates the screenshot/drawing capture; the extension flips it on when you start drawing.
 
 ## Build & deploy
 
@@ -187,6 +220,7 @@ until the extension syncs), extension default `true`.
 
 ```
 shared/config-schema.ts     Zod schema shared by both sides
+shared/url-match.ts         URL-pattern matcher shared by daemon (routing) + popup (current-tab rule)
 daemon/src/
   server.ts                 HTTP API, timelines, watcher, route(), boot
   hex.ts                    read/normalize transcription_history.json
@@ -195,8 +229,8 @@ daemon/src/
   herdr.ts                  CLI wrapper, URL-pattern compiler, workspace/tab/pane resolve
   config.ts                 ports, paths, tunables
 extension/src/
-  background.ts             URL/focus + optional screenshot streaming, config sync, health badge
-  content.ts                optional ⌘-double / Esc gesture detection
-  popup.ts / options.ts     status + focus toggle / routes editor
+  background.ts             URL/focus + screenshot streaming, draw capture/send + clear-watch, config sync
+  content.ts                recording-gesture detection + annotation overlay (pen/text/rect, move/resize)
+  popup.ts / options.ts     status (daemon/hex/last-match/current-tab rule) + toggles + draw / routes editor
 build.mjs · tsconfig*.json · install.sh · uninstall.sh
 ```

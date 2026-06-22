@@ -5,9 +5,12 @@
 //   during its recording window and delivers it to the herdr pane named by a routing rule.
 // - Routing rules + the focus-gate setting are synced from the extension via POST /config.
 
-import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+import { serve } from '@hono/node-server';
+import { describeRoute, openAPIRouteHandler, resolver, validator } from 'hono-openapi';
 import { cfg } from './config';
 import { readHistory } from './hex';
 import type { Transcript } from './hex';
@@ -15,7 +18,20 @@ import { selectUrlForTranscript, matchTranscriptByWindow } from './matcher';
 import type { UrlEntry } from './matcher';
 import { matchRoute, resolveTarget, deliver } from './herdr';
 import { saveScreenshot, selectScreenshot, screenshotCount, lastScreenshotAt } from './screenshots';
-import { ConfigSchema, type Route } from '../../shared/config-schema';
+import { type Route } from '../../shared/config-schema';
+import {
+  ActiveUrlBody,
+  ScreenshotBody,
+  FocusBody,
+  ConfigBody,
+  RecordingBody,
+  MatchBody,
+  RouteTestBody,
+  SendBody,
+  LatestQuery,
+  HealthResponse,
+  AckResponse,
+} from './api-schemas';
 
 const startedAt = Date.now();
 
@@ -77,31 +93,6 @@ function wasFocusedAt(ms: number): boolean | null {
     else break;
   }
   return state;
-}
-
-function send(res: http.ServerResponse, status: number, obj: unknown): void {
-  res.writeHead(status, {
-    'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-  });
-  res.end(JSON.stringify(obj));
-}
-
-function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
-  return new Promise((resolve) => {
-    let data = '';
-    req.on('data', (c) => (data += c));
-    req.on('end', () => {
-      if (!data) return resolve({});
-      try {
-        resolve(JSON.parse(data));
-      } catch {
-        resolve({});
-      }
-    });
-  });
 }
 
 // ---- routing ----
@@ -253,185 +244,227 @@ function scheduleNudge(): void {
   }, 150);
 }
 
-// ---- HTTP server ----
-const server = http.createServer(async (req, res) => {
-  if (req.method === 'OPTIONS') return send(res, 204, {});
-  const u = new URL(req.url || '/', `http://${cfg.HOST}:${cfg.PORT}`);
-  const key = `${req.method} ${u.pathname}`;
+// ---- HTTP server (Hono + hono-openapi) ----
+const app = new Hono();
 
-  try {
-    if (key === 'GET /health') {
-      const hist = readHistory();
-      return send(res, 200, {
-        ok: true,
-        service: 'voicerouter',
-        version: cfg.VERSION,
-        uptimeSec: Math.round((Date.now() - startedAt) / 1000),
-        hexHistoryPath: cfg.HEX_HISTORY_PATH,
-        hexHistoryReadable: hist.ok,
-        transcriptCount: hist.transcripts.length,
-        timelineSize: urlTimeline.length,
-        screenshotCount: screenshotCount(),
-        lastScreenshotAt: lastScreenshotAt(),
-        currentUrl: urlTimeline.length ? urlTimeline[urlTimeline.length - 1].url : null,
-        browserFocused: focusTimeline.length ? focusTimeline[focusTimeline.length - 1].focused : null,
-        config,
-        pendingBracket: !!pendingBracket,
-        lastMatch,
-        lastError,
-      });
-    }
+// CORS for the extension (and curl-based testing). The middleware also answers the OPTIONS
+// preflight itself, so no explicit handler is needed.
+app.use('*', cors({ origin: '*', allowMethods: ['GET', 'POST', 'OPTIONS'], allowHeaders: ['Content-Type'] }));
 
-    if (key === 'GET /') {
-      return send(res, 200, {
-        service: 'voicerouter',
-        version: cfg.VERSION,
-        endpoints: ['GET /health', 'POST /active-url', 'POST /screenshot', 'POST /focus', 'POST /config', 'POST /recording', 'POST /match', 'POST /route-test', 'POST /send', 'GET /transcripts/latest'],
-      });
-    }
+// A describeRoute response entry: a description, optionally with a JSON body schema drawn
+// into the spec via resolver(). Request bodies are documented automatically by validator().
+type SpecSchema = Parameters<typeof resolver>[0];
+const jres = (description: string, schema?: SpecSchema) =>
+  schema
+    ? { description, content: { 'application/json': { schema: resolver(schema) } } }
+    : { description };
 
-    if (key === 'GET /transcripts/latest') {
-      const n = Math.min(20, Number(u.searchParams.get('n') || 5));
-      const { transcripts } = readHistory();
-      return send(res, 200, {
-        transcripts: transcripts.slice(0, n).map((t) => ({
-          id: t.id,
-          durationSec: t.durationSec,
-          endUnixMs: t.endUnixMs,
-          sourceAppName: t.sourceAppName,
-          textPreview: t.text.slice(0, 80),
-        })),
-      });
-    }
-
-    if (key === 'POST /active-url') {
-      const b = await readBody(req);
-      if (typeof b.url !== 'string') return send(res, 400, { ok: false, error: 'url required' });
-      pushUrl({
-        ts: Number(b.ts) || Date.now(),
-        url: b.url,
-        tabId: typeof b.tabId === 'number' ? b.tabId : null,
-        title: typeof b.title === 'string' ? b.title : null,
-      });
-      return send(res, 200, { ok: true, timelineSize: urlTimeline.length });
-    }
-
-    if (key === 'POST /screenshot') {
-      const b = await readBody(req);
-      if (typeof b.dataUrl !== 'string') return send(res, 400, { ok: false, error: 'dataUrl required' });
-      try {
-        const entry = saveScreenshot({
-          ts: Number(b.ts) || Date.now(),
-          url: typeof b.url === 'string' ? b.url : null,
-          tabId: typeof b.tabId === 'number' ? b.tabId : null,
-          dataUrl: b.dataUrl,
-        });
-        return send(res, 200, { ok: true, path: entry.path, count: screenshotCount() });
-      } catch (err) {
-        return send(res, 400, { ok: false, error: (err as Error).message });
-      }
-    }
-
-    if (key === 'POST /focus') {
-      const b = await readBody(req);
-      focusTimeline.push({ ts: Number(b.ts) || Date.now(), focused: !!b.focused });
-      prune(focusTimeline);
-      return send(res, 200, { ok: true, focused: !!b.focused });
-    }
-
-    if (key === 'POST /config') {
-      const parsed = ConfigSchema.safeParse(await readBody(req));
-      if (!parsed.success) {
-        return send(res, 400, { ok: false, error: 'invalid config', issues: parsed.error.issues });
-      }
-      // Partial merge: only overwrite keys that were actually provided.
-      if (parsed.data.requireBrowserFocus !== undefined) config.requireBrowserFocus = parsed.data.requireBrowserFocus;
-      if (parsed.data.attachScreenshot !== undefined) config.attachScreenshot = parsed.data.attachScreenshot;
-      if (parsed.data.routes !== undefined) config.routes = parsed.data.routes;
-      return send(res, 200, { ok: true, config });
-    }
-
-    if (key === 'POST /recording') {
-      const b = await readBody(req);
-      const ts = Number(b.ts) || Date.now();
-      if (b.phase === 'start') {
-        pendingBracket = {
-          tStartMs: ts,
-          tFinishMs: null,
-          startUrl: typeof b.url === 'string' ? b.url : null,
-          startTitle: typeof b.title === 'string' ? b.title : null,
-          tabId: typeof b.tabId === 'number' ? b.tabId : null,
-        };
-        log(`recording START url=${typeof b.url === 'string' ? b.url : '(none)'}`);
-      } else if (b.phase === 'finish') {
-        if (pendingBracket) pendingBracket.tFinishMs = ts;
-        log('recording FINISH (awaiting transcript)');
-        scheduleNudge();
-      } else if (b.phase === 'abort') {
-        pendingBracket = null;
-        log('recording ABORT');
-      }
-      return send(res, 200, { ok: true, phase: b.phase });
-    }
-
-    if (key === 'POST /match') {
-      const b = await readBody(req);
-      const { transcripts } = readHistory();
-      const m = matchTranscriptByWindow({
-        transcripts,
-        seenIds: null,
-        tStartMs: Number(b.tStartMs),
-        tFinishMs: Number(b.tFinishMs),
-      });
-      if (!m) return send(res, 200, { match: null });
-      return send(res, 200, {
-        match: {
-          id: m.transcript.id,
-          textPreview: m.transcript.text.slice(0, 80),
-          durationSec: m.transcript.durationSec,
-          score: m.score,
-          temporalErrSec: m.temporalErrSec,
-          durErrSec: m.durErrSec,
-          confidence: m.confidence,
-          accepted: m.accepted,
-          candidateCount: m.candidateCount,
-        },
-      });
-    }
-
-    if (key === 'POST /route-test') {
-      // End-to-end test without real voice. Defaults safe (dry-run, no submit).
-      const b = await readBody(req);
-      if (typeof b.url !== 'string') return send(res, 400, { ok: false, error: 'url required' });
-      const dryRun = b.dryRun !== false; // default true
-      const result = await deliverToHerdr(b.url, typeof b.text === 'string' ? b.text : '[voice-router test]', {
-        dryRun,
-        submit: b.submit === true,
-      });
-      return send(res, 200, { ok: true, dryRun, result });
-    }
-
-    if (key === 'POST /send') {
-      // Deliver the latest screenshot to the pane matching `url`, no voice needed (the
-      // extension's Send button captures the annotated frame, then calls this). Independent
-      // of the requireBrowserFocus gate — it's an explicit user action.
-      const b = await readBody(req);
-      if (typeof b.url !== 'string') return send(res, 400, { ok: false, error: 'url required' });
-      const shot = selectScreenshot(Date.now());
-      if (!shot) return send(res, 200, { ok: false, reason: 'no-screenshot' });
-      const text = `Screenshot of my current browser tab (read this image file): ${shot.path}`;
-      const delivery = await deliverToHerdr(b.url, text, { submit: true });
-      lastMatch = { at: Date.now(), source: 'send-button', url: b.url, screenshot: shot.path, textPreview: '[screenshot sent]', delivery };
-      log(`SEND [button] -> ${b.url} (${delivery.status})`);
-      log(`   attached screenshot ${shot.path}`);
-      return send(res, 200, { ok: true, screenshot: shot.path, delivery });
-    }
-
-    return send(res, 404, { ok: false, error: 'not found' });
-  } catch (err) {
-    return send(res, 500, { ok: false, error: (err as Error).message });
+app.get(
+  '/health',
+  describeRoute({ summary: 'Daemon health and current-state snapshot', tags: ['status'], responses: { 200: jres('Health snapshot', HealthResponse) } }),
+  (c) => {
+    const hist = readHistory();
+    return c.json({
+      ok: true,
+      service: 'voicerouter',
+      version: cfg.VERSION,
+      uptimeSec: Math.round((Date.now() - startedAt) / 1000),
+      hexHistoryPath: cfg.HEX_HISTORY_PATH,
+      hexHistoryReadable: hist.ok,
+      transcriptCount: hist.transcripts.length,
+      timelineSize: urlTimeline.length,
+      screenshotCount: screenshotCount(),
+      lastScreenshotAt: lastScreenshotAt(),
+      currentUrl: urlTimeline.length ? urlTimeline[urlTimeline.length - 1].url : null,
+      browserFocused: focusTimeline.length ? focusTimeline[focusTimeline.length - 1].focused : null,
+      config,
+      pendingBracket: !!pendingBracket,
+      lastMatch,
+      lastError,
+    });
   }
-});
+);
+
+app.get(
+  '/',
+  describeRoute({ summary: 'API index', tags: ['status'], responses: { 200: jres('Service name, version, and endpoint list') } }),
+  (c) =>
+    c.json({
+      service: 'voicerouter',
+      version: cfg.VERSION,
+      endpoints: ['GET /health', 'GET /openapi', 'POST /active-url', 'POST /screenshot', 'POST /focus', 'POST /config', 'POST /recording', 'POST /match', 'POST /route-test', 'POST /send', 'GET /transcripts/latest'],
+    })
+);
+
+app.get(
+  '/transcripts/latest',
+  describeRoute({ summary: 'Recent Hex transcripts (newest first)', tags: ['transcripts'], responses: { 200: jres('Transcript previews') } }),
+  validator('query', LatestQuery),
+  (c) => {
+    const { n } = c.req.valid('query');
+    const { transcripts } = readHistory();
+    return c.json({
+      transcripts: transcripts.slice(0, n ?? 5).map((t) => ({
+        id: t.id,
+        durationSec: t.durationSec,
+        endUnixMs: t.endUnixMs,
+        sourceAppName: t.sourceAppName,
+        textPreview: t.text.slice(0, 80),
+      })),
+    });
+  }
+);
+
+app.post(
+  '/active-url',
+  describeRoute({ summary: 'Record the active tab URL into the timeline', tags: ['ingest'], responses: { 200: jres('Acknowledged', AckResponse) } }),
+  validator('json', ActiveUrlBody),
+  (c) => {
+    const b = c.req.valid('json');
+    pushUrl({ ts: b.ts ?? Date.now(), url: b.url, tabId: b.tabId ?? null, title: b.title ?? null });
+    return c.json({ ok: true, timelineSize: urlTimeline.length });
+  }
+);
+
+app.post(
+  '/screenshot',
+  describeRoute({ summary: 'Store a screenshot of the active tab', tags: ['ingest'], responses: { 200: jres('Acknowledged', AckResponse), 400: jres('Could not store the screenshot') } }),
+  validator('json', ScreenshotBody),
+  (c) => {
+    const b = c.req.valid('json');
+    try {
+      const entry = saveScreenshot({ ts: b.ts ?? Date.now(), url: b.url ?? null, tabId: b.tabId ?? null, dataUrl: b.dataUrl });
+      return c.json({ ok: true, path: entry.path, count: screenshotCount() });
+    } catch (err) {
+      return c.json({ ok: false, error: (err as Error).message }, 400);
+    }
+  }
+);
+
+app.post(
+  '/focus',
+  describeRoute({ summary: 'Record the browser-window focus state', tags: ['ingest'], responses: { 200: jres('Acknowledged', AckResponse) } }),
+  validator('json', FocusBody),
+  (c) => {
+    const b = c.req.valid('json');
+    const focused = !!b.focused;
+    focusTimeline.push({ ts: b.ts ?? Date.now(), focused });
+    prune(focusTimeline);
+    return c.json({ ok: true, focused });
+  }
+);
+
+app.post(
+  '/config',
+  describeRoute({ summary: 'Sync routing rules and gate settings from the extension', tags: ['config'], responses: { 200: jres('The merged active config', AckResponse) } }),
+  validator('json', ConfigBody),
+  (c) => {
+    const b = c.req.valid('json');
+    // Partial merge: only overwrite keys that were actually provided.
+    if (b.requireBrowserFocus !== undefined) config.requireBrowserFocus = b.requireBrowserFocus;
+    if (b.attachScreenshot !== undefined) config.attachScreenshot = b.attachScreenshot;
+    if (b.routes !== undefined) config.routes = b.routes;
+    return c.json({ ok: true, config });
+  }
+);
+
+app.post(
+  '/recording',
+  describeRoute({ summary: 'Mark a voice-recording bracket (start / finish / abort)', tags: ['ingest'], responses: { 200: jres('Acknowledged', AckResponse) } }),
+  validator('json', RecordingBody),
+  (c) => {
+    const b = c.req.valid('json');
+    const ts = b.ts ?? Date.now();
+    if (b.phase === 'start') {
+      pendingBracket = { tStartMs: ts, tFinishMs: null, startUrl: b.url ?? null, startTitle: b.title ?? null, tabId: b.tabId ?? null };
+      log(`recording START url=${b.url ?? '(none)'}`);
+    } else if (b.phase === 'finish') {
+      if (pendingBracket) pendingBracket.tFinishMs = ts;
+      log('recording FINISH (awaiting transcript)');
+      scheduleNudge();
+    } else {
+      pendingBracket = null;
+      log('recording ABORT');
+    }
+    return c.json({ ok: true, phase: b.phase });
+  }
+);
+
+app.post(
+  '/match',
+  describeRoute({ summary: 'Test transcript matching for a given recording window', tags: ['debug'], responses: { 200: jres('The best-matching transcript, or null') } }),
+  validator('json', MatchBody),
+  (c) => {
+    const b = c.req.valid('json');
+    const { transcripts } = readHistory();
+    const m = matchTranscriptByWindow({ transcripts, seenIds: null, tStartMs: b.tStartMs, tFinishMs: b.tFinishMs });
+    if (!m) return c.json({ match: null });
+    return c.json({
+      match: {
+        id: m.transcript.id,
+        textPreview: m.transcript.text.slice(0, 80),
+        durationSec: m.transcript.durationSec,
+        score: m.score,
+        temporalErrSec: m.temporalErrSec,
+        durErrSec: m.durErrSec,
+        confidence: m.confidence,
+        accepted: m.accepted,
+        candidateCount: m.candidateCount,
+      },
+    });
+  }
+);
+
+app.post(
+  '/route-test',
+  describeRoute({ summary: 'Exercise routing without real voice (dry-run by default)', tags: ['debug'], responses: { 200: jres('The delivery result') } }),
+  validator('json', RouteTestBody),
+  async (c) => {
+    const b = c.req.valid('json');
+    const dryRun = b.dryRun !== false; // default true
+    const result = await deliverToHerdr(b.url, b.text ?? '[voice-router test]', { dryRun, submit: b.submit === true });
+    return c.json({ ok: true, dryRun, result });
+  }
+);
+
+app.post(
+  '/send',
+  describeRoute({ summary: 'Deliver the latest screenshot to the pane matching a URL', tags: ['deliver'], responses: { 200: jres('Delivery result', AckResponse) } }),
+  validator('json', SendBody),
+  async (c) => {
+    // Deliver the latest screenshot to the pane matching `url`, no voice needed (the
+    // extension's Send button captures the annotated frame, then calls this). Independent
+    // of the requireBrowserFocus gate — it's an explicit user action.
+    const b = c.req.valid('json');
+    const shot = selectScreenshot(Date.now());
+    if (!shot) return c.json({ ok: false, reason: 'no-screenshot' });
+    const text = `Screenshot of my current browser tab (read this image file): ${shot.path}`;
+    const delivery = await deliverToHerdr(b.url, text, { submit: true });
+    lastMatch = { at: Date.now(), source: 'send-button', url: b.url, screenshot: shot.path, textPreview: '[screenshot sent]', delivery };
+    log(`SEND [button] -> ${b.url} (${delivery.status})`);
+    log(`   attached screenshot ${shot.path}`);
+    return c.json({ ok: true, screenshot: shot.path, delivery });
+  }
+);
+
+// The OpenAPI 3.1 document, assembled from the describeRoute/validator metadata above.
+app.get(
+  '/openapi',
+  openAPIRouteHandler(app, {
+    documentation: {
+      openapi: '3.1.0',
+      info: {
+        title: 'Voice Router daemon',
+        version: cfg.VERSION,
+        description: 'Local daemon that routes Hex voice transcripts to herdr panes based on the active browser tab.',
+      },
+      servers: [{ url: `http://${cfg.HOST}:${cfg.PORT}`, description: 'local daemon' }],
+    },
+  })
+);
+
+app.notFound((c) => c.json({ ok: false, error: 'not found' }, 404));
+app.onError((err, c) => c.json({ ok: false, error: (err as Error).message }, 500));
 
 // ---- boot ----
 try {
@@ -441,14 +474,14 @@ try {
   log('boot warning:', (err as Error).message);
 }
 
+const server = serve({ fetch: app.fetch, hostname: cfg.HOST, port: cfg.PORT }, () => {
+  log(`voicerouter ${cfg.VERSION} listening on http://${cfg.HOST}:${cfg.PORT}`);
+  log(`hex history: ${cfg.HEX_HISTORY_PATH}`);
+});
+
 // Surface listen failures (e.g. EADDRINUSE) instead of zombie-ing alive-but-not-listening;
 // exiting lets launchd's KeepAlive respawn cleanly.
 server.on('error', (err) => {
   log('FATAL server error:', (err as Error).message);
   process.exit(1);
-});
-
-server.listen(cfg.PORT, cfg.HOST, () => {
-  log(`voicerouter ${cfg.VERSION} listening on http://${cfg.HOST}:${cfg.PORT}`);
-  log(`hex history: ${cfg.HEX_HISTORY_PATH}`);
 });

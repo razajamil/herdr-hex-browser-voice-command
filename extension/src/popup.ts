@@ -4,6 +4,10 @@ import { matchRoute } from '../../shared/url-match';
 const DAEMON = 'http://127.0.0.1:8137';
 const checksEl = document.getElementById('checks')!;
 
+// Whether the current tab matches a route. While unknown (popup just opened) we treat it
+// as no-match so the per-tab options start disabled rather than flashing enabled.
+let currentTabHasMatch = false;
+
 function esc(s: string | null | undefined): string {
   const map: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
   return (s || '').replace(/[&<>"]/g, (c) => map[c]);
@@ -51,6 +55,11 @@ async function renderStatus(): Promise<void> {
 
   const url = await currentTabUrl();
   const matched = matchRoute(url, await routesFrom(h));
+
+  // With no route matching this tab there's nothing to route, so gate every option
+  // except "Manage routes…" (the way to fix a no-match by adding a rule).
+  currentTabHasMatch = !!matched;
+  applyMatchGate();
 
   let html = '';
   html += check(h ? 'ok' : 'bad', 'Daemon', h ? 'up' : 'not reachable');
@@ -129,7 +138,16 @@ function setDrawBtn(state: 'on' | 'off' | 'unavailable'): void {
     state === 'on' ? '■ Stop drawing' : state === 'off' ? '✏️ Draw on this page' : 'Drawing not available here';
 }
 
+// Enable/disable the per-tab options based on whether a route matches the current tab.
+// "Manage routes…" stays enabled so the user can add a rule to make this tab match.
+function applyMatchGate(): void {
+  reqFocusEl.disabled = !currentTabHasMatch;
+  attachShotEl.disabled = !currentTabHasMatch;
+  refreshDrawBtn();
+}
+
 async function refreshDrawBtn(): Promise<void> {
+  if (!currentTabHasMatch) return setDrawBtn('unavailable');
   const tab = await activeTab();
   if (!tab?.id || !(tab.url || '').startsWith('http')) return setDrawBtn('unavailable');
   try {

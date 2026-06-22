@@ -11,6 +11,7 @@
   .opt { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 3px 0; }
   .opt input { margin: 2px 0 0; }
   .opt .hint { color: #8c959f; font-size: 11px; margin-top: 2px; }
+  .opt:has(input:disabled) { opacity: .5; cursor: default; }
   .routes-btn { margin-top: 10px; width: 100%; padding: 7px; border: 1px solid #d0d7de; border-radius: 6px; background: #f6f8fa; font: inherit; font-size: 12px; cursor: pointer; }
   .routes-btn:hover { background: #eef1f4; }
   .status { margin-top: 14px; padding-top: 10px; border-top: 1px solid #eaeef2; }

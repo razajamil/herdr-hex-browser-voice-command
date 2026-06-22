@@ -212,7 +212,7 @@ sides) gates the screenshot/drawing capture; the extension flips it on when you 
 - **TypeScript** everywhere; `tsc --noEmit` type-checks (base + per-target leaf configs).
 - **esbuild** bundles both sides (Zod inlined, no runtime `node_modules`): daemon →
   `daemon/dist/server.js` (node/cjs); extension → `extension/dist/*.js` (browser/iife).
-- **`install.sh`** runs `npm install && npm run build`, then installs the daemon as a
+- **`install.sh`** runs `pnpm install && pnpm run build`, then installs the daemon as a
   **launchd LaunchAgent** (`RunAtLoad` + `KeepAlive`, absolute node/herdr paths baked in).
 - The **extension** is loaded unpacked from `extension/` (references `dist/*.js`).
 

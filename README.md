@@ -53,7 +53,7 @@ extension/        Chrome MV3 extension (load unpacked)
   content.js      OPTIONAL: detects ⌘-double-tap (start) / Escape (abort) as hints
   popup.html/js   status panel + focus toggle + "Manage routes" button
   options.html/js routes editor (list of url-pattern → tab/pane rules)
-daemon/           Node HTTP service (zero npm deps)
+daemon/           Hono HTTP service (deps bundled into dist by esbuild)
   server.js       endpoints + transcript watcher + routing stub
   hex.js          reads/normalizes Hex history
   matcher.js      URL-for-transcript + explicit-window matchers

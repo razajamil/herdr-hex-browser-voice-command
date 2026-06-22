@@ -1,5 +1,5 @@
 // Validates the matcher against the REAL Hex history on this machine.
-// Run: npm run build && npm run test:match
+// Run: pnpm run build && pnpm run test:match
 
 import { readHistory } from './hex';
 import { matchTranscriptByWindow } from './matcher';

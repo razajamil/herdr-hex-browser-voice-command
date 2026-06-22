@@ -3,10 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "description": "Routes Hex voice transcripts to the right herdr Claude Code pane based on the active browser tab.",
+  "packageManager": "pnpm@11.8.0",
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc -p daemon/tsconfig.json && tsc -p extension/tsconfig.json",
-    "check": "npm run typecheck && npm run build",
+    "check": "pnpm run typecheck && pnpm run build",
     "test:match": "node daemon/dist/test-match.js"
   },
   "dependencies": {

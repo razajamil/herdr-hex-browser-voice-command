@@ -36,9 +36,12 @@ HERDR_BIN_PATH="$(command -v herdr || echo herdr)"
 echo "  herdr:   $HERDR_BIN_PATH"
 
 # 2b. Install deps + build TypeScript (daemon/dist + extension/dist). Must succeed before
-#     launchd points at dist/server.js.
-echo "  building (npm install + npm run build)…"
-( cd "$REPO_DIR" && npm install && npm run build ) || { echo "✗ build failed — see output above" >&2; exit 1; }
+#     launchd points at dist/server.js. pnpm is pinned by package.json's "packageManager"
+#     field and provisioned via corepack (bundled with Node) when not already on PATH.
+echo "  building (pnpm install + pnpm run build)…"
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+if command -v pnpm >/dev/null 2>&1; then PNPM="pnpm"; else PNPM="corepack pnpm"; fi
+( cd "$REPO_DIR" && $PNPM install --frozen-lockfile && $PNPM run build ) || { echo "✗ build failed — see output above" >&2; exit 1; }
 
 # 3. Render the plist.
 mkdir -p "$LOG_DIR" "$(dirname "$PLIST_DEST")"

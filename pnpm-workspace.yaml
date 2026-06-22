@@ -1,0 +1,4 @@
+# pnpm reads its settings from here (pnpm 11+), not from package.json.
+# esbuild ships a postinstall that links its platform-native binary; allow it to run.
+allowBuilds:
+  esbuild: true

@@ -10,6 +10,8 @@
   .route-head .f-name { flex: 1; font-weight: 600; }
   label { display: block; font-size: 12px; color: #57606a; margin-bottom: 10px; }
   label:last-child { margin-bottom: 0; }
+  .opt { font-weight: 400; color: #8c959f; }
+  .opt code { background: #eaeef2; padding: 0 4px; border-radius: 4px; }
   input[type=text] { width: 100%; box-sizing: border-box; margin-top: 3px; padding: 7px 9px; border: 1px solid #d0d7de; border-radius: 6px; font: inherit; font-size: 13px; }
   .two { display: flex; gap: 12px; }
   .two label { flex: 1; }
@@ -42,7 +44,10 @@
   workspace label / worktree folder, tolerant of a <code>fix-</code>/<code>feat-</code> prefix).<br />
   Example: <code>http://{workspace}.payroll.localhost/*</code> on
   <code>http://rwr-1234-heardroom.payroll.localhost/v2</code> → workspace key
-  <code>rwr-1234-heardroom</code>, delivered to tab <em>main</em> / pane <em>agent</em>.
+  <code>rwr-1234-heardroom</code>, delivered to tab <em>main</em> / pane <em>agent</em>.<br /><br />
+  <strong>Workspace key</strong> — for a URL with no <code>{workspace}</code> to capture (e.g. a
+  master dev server at <code>http://payroll.localhost/*</code>), set this to pin the target
+  workspace directly, e.g. <code>reckon-frontend</code>.
 </div>
 
 <script src="dist/options.js"></script>

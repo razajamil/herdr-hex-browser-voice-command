@@ -9,6 +9,10 @@ export const RouteSchema = z.object({
   urlPattern: z.string(),
   tabName: z.string(),
   paneName: z.string(),
+  // Optional fixed herdr workspace key. Used when the URL carries no {workspace} to capture
+  // (e.g. a "master" dev-server URL with no per-worktree subdomain). When set, it pins the
+  // target workspace; otherwise the workspace key comes from the URL pattern's first capture.
+  workspaceKey: z.string().optional(),
 });
 
 export const ConfigSchema = z.object({

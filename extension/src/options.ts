@@ -19,12 +19,17 @@ function val(card: Element, sel: string): string {
 
 // Pull current input values back into `routes` (so edits survive add/remove).
 function collect(): void {
-  routes = Array.from(listEl.querySelectorAll('.route')).map((card) => ({
-    name: val(card, '.f-name'),
-    urlPattern: val(card, '.f-url'),
-    tabName: val(card, '.f-tab') || 'main',
-    paneName: val(card, '.f-pane') || 'agent',
-  }));
+  routes = Array.from(listEl.querySelectorAll('.route')).map((card) => {
+    const workspaceKey = val(card, '.f-wskey');
+    return {
+      name: val(card, '.f-name'),
+      urlPattern: val(card, '.f-url'),
+      tabName: val(card, '.f-tab') || 'main',
+      paneName: val(card, '.f-pane') || 'agent',
+      // Omit when blank so routes that rely on a {workspace} capture stay clean.
+      ...(workspaceKey ? { workspaceKey } : {}),
+    };
+  });
 }
 
 function render(): void {
@@ -42,6 +47,9 @@ function render(): void {
       </div>
       <label>URL pattern
         <input type="text" class="f-url" placeholder="http://{workspace}.payroll.localhost/*" value="${escAttr(r.urlPattern)}" />
+      </label>
+      <label>Workspace key <span class="opt">— optional; pin a workspace when the URL has no <code>{workspace}</code></span>
+        <input type="text" class="f-wskey" placeholder="e.g. reckon-frontend" value="${escAttr(r.workspaceKey)}" />
       </label>
       <div class="two">
         <label>Tab<input type="text" class="f-tab" placeholder="main" value="${escAttr(r.tabName)}" /></label>

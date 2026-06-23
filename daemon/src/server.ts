@@ -156,9 +156,12 @@ async function deliverToHerdr(
     log(`   skip: no route matches ${url || 'no url'}`);
     return { status: 'skipped', reason: 'no-matching-route', url };
   }
-  const { route: rule, key } = matched;
+  const { route: rule } = matched;
+  // An explicit workspaceKey pins the target workspace (for URLs with no {workspace} to
+  // capture, e.g. a master dev-server URL); otherwise fall back to the URL pattern's capture.
+  const key = (rule.workspaceKey || matched.key).toLowerCase();
   if (!key) {
-    log(`   skip: route "${rule.name}" pattern has no {capture} for the workspace key`);
+    log(`   skip: route "${rule.name}" has no workspace key (URL has no {capture} and no workspaceKey set)`);
     return { status: 'skipped', reason: 'no-workspace-key', route: rule.name };
   }
   try {

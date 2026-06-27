@@ -164,6 +164,7 @@ export class Annotator {
     this.current = this.tools[name];
     this.current.activate(this.ctx);
     this.toolbar?.setActiveTool(name);
+    this.scene?.setTool(name); // cursor shape + trailing tool chip
   }
 
   private async undo(): Promise<void> {

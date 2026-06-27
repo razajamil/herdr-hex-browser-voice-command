@@ -1,6 +1,8 @@
 // Shared constants for the annotation overlay. Kept in one place so colours/sizes/z-indexes
 // don't drift across the tools, toolbar, and scene.
 
+import type { ToolName } from './tools/types';
+
 export const PEN = '#ff2d2d';
 export const STROKE_WIDTH = 3;
 export const FONT_PX = 17;
@@ -40,3 +42,19 @@ export const SELECTION_STYLE = {
 };
 
 export const DEFAULT_LABEL = 'speak or Send';
+
+// Cursor shape over the canvas per active tool: text tool gets the I-beam, the drawing tools get
+// crosshairs. No active tool falls back to the plain default (handled in Scene).
+export const TOOL_CURSOR: Record<ToolName, string> = {
+  pen: 'crosshair',
+  rect: 'crosshair',
+  text: 'text',
+};
+
+// Glyph shown in the small chip that trails the cursor to indicate the active tool. Mirrors the
+// toolbar buttons' leading marks (Text has no mark, so it uses a "T").
+export const TOOL_GLYPH: Record<ToolName, string> = {
+  pen: '✏️',
+  rect: '▭',
+  text: 'T',
+};

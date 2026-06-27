@@ -1,4 +1,4 @@
-import { DEFAULT_LABEL, TOOLBAR_Z } from './constants';
+import { DEFAULT_LABEL, PEN, TOOLBAR_AUTO_COLLAPSE_MS, TOOLBAR_RECOLLAPSE_MS, TOOLBAR_Z } from './constants';
 import type { ToolName } from './tools/types';
 
 export interface ToolbarCallbacks {
@@ -11,24 +11,35 @@ export interface ToolbarCallbacks {
 
 type Variant = 'default' | 'primary' | 'danger';
 
-// The floating editing toolbar (bottom-center). Pure DOM, separate from the canvas — and because
+// The floating editing toolbar (bottom-left). Pure DOM, separate from the canvas — and because
 // frames are exported from the Fabric canvas (not re-screenshotted from the tab), the toolbar is
-// never in a captured frame and so never needs to be hidden. It just builds buttons and reports
-// clicks back through callbacks; it holds no annotation state.
+// never in a captured frame and so never needs to be hidden.
+//
+// It starts fully expanded, then collapses to a small dot after a few idle seconds to stay out of
+// the way; hovering the dot expands it again. The root shrink-wraps whichever of `content`/`dot`
+// is shown, so a single mouseenter/leave on the root drives the whole thing.
 export class Toolbar {
   readonly el: HTMLDivElement;
+  private readonly content: HTMLDivElement;
+  private readonly dot: HTMLDivElement;
   private readonly label: HTMLSpanElement;
   private readonly toolButtons: Record<ToolName, HTMLButtonElement>;
   private statusTimer: number | null = null;
+  private collapseTimer: number | null = null;
+  private hovered = false;
 
   constructor(cb: ToolbarCallbacks) {
     const bar = document.createElement('div');
     Object.assign(bar.style, {
       position: 'fixed',
       bottom: '16px',
-      left: '50%',
-      transform: 'translateX(-50%)',
+      left: '16px',
       zIndex: TOOLBAR_Z,
+    } as CSSStyleDeclaration);
+
+    // The full toolbar row, shown when expanded.
+    const content = document.createElement('div');
+    Object.assign(content.style, {
       display: 'flex',
       gap: '6px',
       alignItems: 'center',
@@ -52,7 +63,7 @@ export class Toolbar {
       margin: '0 6px',
     } as CSSStyleDeclaration);
 
-    bar.append(
+    content.append(
       pen,
       text,
       rect,
@@ -63,29 +74,92 @@ export class Toolbar {
       this.button('Cancel', 'Discard annotations & exit', cb.onCancel, 'danger'),
       this.label
     );
+
+    // The collapsed state: a small dot the user hovers to bring the toolbar back.
+    const dot = document.createElement('div');
+    dot.title = 'Annotation tools — hover to expand';
+    Object.assign(dot.style, {
+      display: 'none',
+      width: '22px',
+      height: '22px',
+      borderRadius: '50%',
+      background: PEN,
+      border: '2px solid #fff',
+      boxShadow: '0 2px 10px rgba(0,0,0,.3)',
+      cursor: 'pointer',
+    } as CSSStyleDeclaration);
+
+    bar.append(content, dot);
+    bar.addEventListener('mouseenter', () => {
+      this.hovered = true;
+      this.clearCollapseTimer();
+      this.expand();
+    });
+    bar.addEventListener('mouseleave', () => {
+      this.hovered = false;
+      this.scheduleCollapse(TOOLBAR_RECOLLAPSE_MS);
+    });
+
     document.documentElement.appendChild(bar);
     this.el = bar;
+    this.content = content;
+    this.dot = dot;
+
+    // Visible on entry, then fold away if the user doesn't engage with it.
+    this.scheduleCollapse(TOOLBAR_AUTO_COLLAPSE_MS);
   }
 
   setActiveTool(name: ToolName): void {
     (Object.keys(this.toolButtons) as ToolName[]).forEach((n) => this.styleTool(this.toolButtons[n], n === name));
   }
 
-  // Briefly show a status message (e.g. a send failure), then revert to the default label.
+  // Briefly show a status message (e.g. a send failure), then revert to the default label. Expands
+  // the toolbar first so a collapsed dot doesn't hide the message, then lets it re-collapse.
   flashStatus(text: string): void {
     if (this.statusTimer != null) clearTimeout(this.statusTimer);
+    this.clearCollapseTimer();
+    this.expand();
     this.label.textContent = text;
     this.label.style.color = '#cf222e';
     this.statusTimer = window.setTimeout(() => {
       this.label.textContent = DEFAULT_LABEL;
       this.label.style.color = '#57606a';
       this.statusTimer = null;
+      if (!this.hovered) this.scheduleCollapse(TOOLBAR_RECOLLAPSE_MS);
     }, 1800);
   }
 
   destroy(): void {
     if (this.statusTimer != null) clearTimeout(this.statusTimer);
+    this.clearCollapseTimer();
     this.el.remove();
+  }
+
+  // ---- collapse/expand ----
+  private expand(): void {
+    this.content.style.display = 'flex';
+    this.dot.style.display = 'none';
+  }
+
+  private collapse(): void {
+    if (this.hovered) return; // never fold away while the pointer is on it
+    this.content.style.display = 'none';
+    this.dot.style.display = 'block';
+  }
+
+  private scheduleCollapse(delay: number): void {
+    this.clearCollapseTimer();
+    this.collapseTimer = window.setTimeout(() => {
+      this.collapseTimer = null;
+      this.collapse();
+    }, delay);
+  }
+
+  private clearCollapseTimer(): void {
+    if (this.collapseTimer != null) {
+      clearTimeout(this.collapseTimer);
+      this.collapseTimer = null;
+    }
   }
 
   // ---- DOM builders ----

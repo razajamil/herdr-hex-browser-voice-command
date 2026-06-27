@@ -25,6 +25,11 @@ export const CAPTURE_DEBOUNCE_MS = 500;
 // After ⌘⌘ starts a recording, auto-exit if the background's clear-exit never arrives.
 export const RECORDING_EXIT_MS = 1500;
 
+// Toolbar: show fully on entry, then collapse to a dot after this long if left alone; once the
+// pointer leaves the expanded bar, re-collapse after the shorter grace delay.
+export const TOOLBAR_AUTO_COLLAPSE_MS = 3000;
+export const TOOLBAR_RECOLLAPSE_MS = 600;
+
 // Layering: canvas below, then the text-entry editor box, then the toolbar on top.
 export const CANVAS_Z = '2147483645';
 export const EDITOR_Z = '2147483646';

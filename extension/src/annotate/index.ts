@@ -114,7 +114,7 @@ export class Annotator {
     this.detachResize = () => window.removeEventListener('resize', onResize);
 
     this.setTool('pen');
-    scene.focus(); // grab focus so P/T/R work before the first click (see Scene.focus)
+    scene.focus(); // grab focus so P/T/B work before the first click (see Scene.focus)
     notifyStarted();
   }
 

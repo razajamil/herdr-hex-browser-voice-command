@@ -15,5 +15,11 @@
     }
   ],
   "action": { "default_title": "Voice Router", "default_popup": "popup.html" },
-  "options_ui": { "page": "options.html", "open_in_tab": true }
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "web_accessible_resources": [
+    {
+      "resources": ["dist/annotate.js"],
+      "matches": ["http://*/*", "https://*/*"]
+    }
+  ]
 }

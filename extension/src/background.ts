@@ -60,8 +60,6 @@ async function reportTab(tab: chrome.tabs.Tab | undefined): Promise<void> {
 const SHOT_MIN_INTERVAL_MS = 600;
 let lastShotAt = 0;
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
 async function captureAndPost(tab: chrome.tabs.Tab): Promise<void> {
   try {
     const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 55 });
@@ -73,8 +71,16 @@ async function captureAndPost(tab: chrome.tabs.Tab): Promise<void> {
   }
 }
 
+// Post a frame the content script already encoded (the annotated Fabric canvas, composited on
+// top of the base snapshot) to the daemon. Used by the draw-frame / draw-send paths so we never
+// re-screenshot the live tab — and thus never capture our own overlay — while drawing.
+async function postShot(dataUrl: string, tab: chrome.tabs.Tab): Promise<void> {
+  await post('/screenshot', { dataUrl, url: tab.url, tabId: tab.id, ts: Date.now() });
+}
+
 async function maybeCaptureScreenshot(tab: chrome.tabs.Tab): Promise<void> {
   if (!isTrackable(tab.url) || !tab.active) return; // captureVisibleTab grabs the ACTIVE tab
+  if (tab.id != null && tab.id === drawingTabId) return; // drawing → content pushes annotated frames
   const s = await getSettings();
   if (!s.attachScreenshot) return;
   const now = Date.now();
@@ -90,9 +96,11 @@ async function maybeCaptureScreenshot(tab: chrome.tabs.Tab): Promise<void> {
 async function captureOnRecordingStart(tab: chrome.tabs.Tab | undefined): Promise<void> {
   if (!tab) return;
   const s = await getSettings();
-  if (s.attachScreenshot && isTrackable(tab.url)) {
+  // While drawing, the content script streams annotated frames itself (live captureVisibleTab
+  // would grab the overlay), so only capture here when NOT drawing.
+  const isDrawing = tab.id != null && tab.id === drawingTabId;
+  if (!isDrawing && s.attachScreenshot && isTrackable(tab.url)) {
     lastShotAt = Date.now();
-    await sleep(60); // let the content script's toolbar-hide paint before we capture
     await captureAndPost(tab);
   }
   if (tab.id != null) {
@@ -200,14 +208,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return;
   }
 
-  // Capture the annotated viewport on request (content hides its toolbar first, then
-  // restores when we reply). This is the reliable path — driven by drawing, not the gesture.
-  if (msg.type === 'capture-now') {
+  // Grab a pristine screenshot for the content script to annotate on top of. Requested before
+  // the overlay is injected, so the shot is clean; higher quality than the keep-fresh stream
+  // since it becomes the canvas everything is drawn on and re-encoded from.
+  if (msg.type === 'capture-base') {
     (async () => {
-      if (tab) {
-        await sleep(50); // let the toolbar-hide paint before capture
-        await captureAndPost(tab);
+      try {
+        if (!tab) return sendResponse({ error: 'no-tab' });
+        const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 80 });
+        sendResponse({ dataUrl });
+      } catch (e) {
+        console.warn('[voice-router] capture-base failed:', (e as Error)?.message ?? e);
+        sendResponse({ error: 'capture-failed' });
       }
+    })();
+    return true; // async sendResponse
+  }
+
+  // Keep-fresh stream: the content script composites the annotated frame and hands it to us to
+  // store on the daemon (so the speak path has the latest drawing). No captureVisibleTab here.
+  if (msg.type === 'draw-frame') {
+    (async () => {
+      if (tab && typeof msg.dataUrl === 'string') await postShot(msg.dataUrl, tab);
       sendResponse({ ok: true });
     })();
     return true; // async sendResponse
@@ -222,12 +244,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return;
   }
 
-  // Send button: capture the annotated frame and deliver it to the matching pane now.
+  // Send button: store the content-supplied annotated frame, then deliver it to the matching
+  // pane now.
   if (msg.type === 'draw-send') {
     (async () => {
       if (!tab || !isTrackable(tab.url)) return sendResponse({ delivered: false, reason: 'no-route' });
-      await sleep(50); // toolbar already hidden by the content script; let it paint
-      await captureAndPost(tab);
+      if (typeof msg.dataUrl === 'string') await postShot(msg.dataUrl, tab);
       sendResponse(await sendScreenshot(tab.url));
     })();
     return true; // async sendResponse

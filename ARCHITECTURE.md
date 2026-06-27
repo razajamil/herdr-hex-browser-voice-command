@@ -143,32 +143,42 @@ This needs the `<all_urls>` host permission (required by `captureVisibleTab`), a
 ## Optional: drawing on the page
 
 To make a prompt more precise ("make **this** bigger" + an arrow + a label), the content
-script overlays a transparent full-viewport `<canvas>` with three tools — a freehand **Pen**,
-a **Text** tool (click empty space to type; click an existing label to drag it), and a
-**Rectangle** tool (drag to draw; click a rect to select, then drag the body to move or a
-corner handle to resize). Everything is one item list on the canvas (text rasterized with
-`textBaseline='top'`; entry via a temporary `contentEditable` box; move/resize hit-test
-against measured bounds and corner handles). Because the canvas is part of the rendered
-viewport, the captured screenshot includes the annotations — no special compositing. The
-toolbar and the rect selection handles are hidden during capture so they stay out of the shot.
-Tools have keyboard shortcuts in draw mode (**P** pen, **T** text, **R** rect), shown as
-keycaps on the toolbar buttons; they're suppressed while typing in a text box.
+script overlays an editable **[Fabric.js](https://fabricjs.com/) canvas** with three tools — a
+freehand **Pen**, a **Text** tool (click empty space to type; click a label to select/move,
+double-click to re-edit), and a **Rectangle** tool (drag to draw; select to move, corner
+handles to resize). Annotations are real Fabric objects, so selection, move/resize handles,
+hit-testing, and inline text editing come from the library rather than being hand-rolled.
+Tools have keyboard shortcuts in draw mode (**P** pen, **T** text, **R** rect, **⌘Z** undo,
+**Delete** removes the selection), shown as keycaps on the toolbar; they're suppressed while
+typing in a label.
 
+The engine lives in `extension/src/annotate/` (Scene = canvas + snapshot + export, Tools, undo
+History, daemon Capture, Toolbar, keyboard), driven by a thin `content.ts`.
+
+- **Capture-once / annotate-the-image** — on entry the background takes **one** clean
+  `captureVisibleTab` *before* the overlay is injected, and that screenshot becomes the Fabric
+  canvas **background**. You annotate the frozen snapshot; the page is effectively still since
+  the overlay swallows input. Frames are produced by `canvas.toDataURL()` (snapshot +
+  annotations), not by re-screenshotting the live tab — and Fabric never renders selection
+  chrome into `toDataURL`, so the toolbar (separate DOM) and handles stay out of the shot
+  **without being hidden**. This is what removed the per-stroke toolbar flicker, and it cuts
+  `captureVisibleTab` from once-per-stroke to once-per-session.
 - **Toggle** — the popup's "Draw on this page" button messages the active tab's content
   script (`{type:'draw', on}`); enabling it also flips `attachScreenshot` on (else the
   annotation reaches no one). Per-tab, transient (resets on navigation).
-- **Capture timing** — the ⌘⌘ gesture can't be relied on (the target app iframes its
-  content, so keyboard events never reach the content script). So the annotated frame is
-  captured on **stroke-pause** (debounced after you draw / type / move / resize — pointer-
-  driven, always reliable) and on Send; the background does the actual `captureVisibleTab`.
+- **Frame timing** — the ⌘⌘ gesture can't be relied on (the target app iframes its content, so
+  keyboard events never reach the content script). So the composited frame is pushed to the
+  daemon (`draw-frame` → `POST /screenshot`) on **stroke-pause** (debounced after you draw /
+  type / move / resize) and flushed on recording-start; the Send button (`draw-send`) stores +
+  delivers in one step. The background never `captureVisibleTab`s a tab that's mid-draw (it
+  would grab the overlay) — it just relays the content-supplied frame.
 - **Lifecycle / clear-on-send** — annotations persist until you exit (the **Cancel** button
   or the popup toggle — deliberately *not* `Esc`, which is too easy to hit) or a voice command
   is sent. Because the gesture is unreliable, clearing after a sent command is driven by the
   background **watching the daemon's `lastMatch`** while a tab is in draw mode: a new routed
   transcript → it messages the tab to clear + exit.
-- **Send button** — delivers the annotated screenshot to the matching pane immediately
-  (no voice) via `POST /send`: the toolbar hides, the background captures + delivers, and on
-  success the drawing clears and exits (failures flash the reason in the toolbar).
+- **Send button** — delivers the annotated frame to the matching pane immediately (no voice)
+  via `POST /send`, then clears + exits on success (failures flash the reason in the toolbar).
 
 ## Interfaces
 

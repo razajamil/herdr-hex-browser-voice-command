@@ -1,4 +1,7 @@
 # pnpm reads its settings from here (pnpm 11+), not from package.json.
 # esbuild ships a postinstall that links its platform-native binary; allow it to run.
 allowBuilds:
+  # fabric pulls node-canvas as an OPTIONAL dep for server-side rendering. We only use fabric in
+  # the browser content script, so its native build isn't needed (and would require Cairo, etc.).
+  canvas: false
   esbuild: true

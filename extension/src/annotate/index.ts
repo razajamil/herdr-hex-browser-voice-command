@@ -7,7 +7,7 @@ import { attachKeyboard } from './keyboard';
 import { notifyStarted, notifyStopped, requestBaseCapture } from './messages';
 import { Scene } from './scene';
 import { Toolbar } from './toolbar';
-import { createRectTool, createTextTool, penTool } from './tools';
+import { createArrowTool, createRectTool, createTextTool, penTool } from './tools';
 import type { Tool, ToolContext, ToolName } from './tools/types';
 
 // Top-level annotation controller. Owns the Scene (Fabric canvas + frozen snapshot), Toolbar,
@@ -77,7 +77,7 @@ export class Annotator {
         this.tracking = true;
       },
     };
-    this.tools = { pen: penTool, rect: createRectTool(), text: createTextTool() };
+    this.tools = { pen: penTool, rect: createRectTool(), arrow: createArrowTool(), text: createTextTool() };
 
     const onChange = (): void => {
       if (!this.tracking || this.history?.isRestoring) return;

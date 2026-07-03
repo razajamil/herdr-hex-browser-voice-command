@@ -90,6 +90,7 @@ export class Scene {
       preserveObjectStacking: true,
       uniformScaling: true, // corner-drag keeps aspect (text scales proportionally; rects use edge handles for free w/h)
       selection: false, // no drag-to-marquee — empty-drag is the rect tool; objects still select individually
+      targetFindTolerance: 8, // px band for per-pixel hits (the arrow) so its thin stroke is easy to grab
     });
 
     // The screenshot is in physical pixels (≈ viewport × dpr); scale it to cover the logical

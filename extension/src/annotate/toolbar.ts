@@ -53,7 +53,8 @@ export class Toolbar {
     const pen = this.toolButton('✏️ Pen', 'P', 'Freehand pen (P)', () => cb.onTool('pen'));
     const text = this.toolButton('Text', 'T', 'Click the page, then type; drag to move (T)', () => cb.onTool('text'));
     const rect = this.toolButton('▭ Box', 'B', 'Drag to draw; select to move/resize (B)', () => cb.onTool('rect'));
-    this.toolButtons = { pen, text, rect };
+    const arrow = this.toolButton('↗ Arrow', 'A', 'Drag to draw a straight arrow (A)', () => cb.onTool('arrow'));
+    this.toolButtons = { pen, text, rect, arrow };
 
     this.label = document.createElement('span');
     this.label.textContent = DEFAULT_LABEL;
@@ -67,6 +68,7 @@ export class Toolbar {
       pen,
       text,
       rect,
+      arrow,
       this.divider(),
       this.button('Undo', 'Undo last (⌘Z)', cb.onUndo),
       this.button('Clear', 'Clear all', cb.onClear),

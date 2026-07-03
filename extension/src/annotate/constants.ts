@@ -53,6 +53,7 @@ export const DEFAULT_LABEL = 'speak or Send';
 export const TOOL_CURSOR: Record<ToolName, string> = {
   pen: 'crosshair',
   rect: 'crosshair',
+  arrow: 'crosshair',
   text: 'text',
 };
 
@@ -61,5 +62,6 @@ export const TOOL_CURSOR: Record<ToolName, string> = {
 export const TOOL_GLYPH: Record<ToolName, string> = {
   pen: '✏️',
   rect: '▭',
+  arrow: '↗',
   text: 'T',
 };

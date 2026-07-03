@@ -13,7 +13,7 @@ function isTypingTarget(): boolean {
   return !!el && (el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
 }
 
-// Tool shortcuts (P/T/B), undo (⌘/Ctrl+Z), and delete-selection while annotating. Returns a
+// Tool shortcuts (P/T/B/A), undo (⌘/Ctrl+Z), and delete-selection while annotating. Returns a
 // detach function. (Escape never leaves draw mode — too easy to hit by accident; the label
 // editor handles its own Escape to cancel.)
 export function attachKeyboard(handlers: KeyboardHandlers): () => void {
@@ -26,10 +26,10 @@ export function attachKeyboard(handlers: KeyboardHandlers): () => void {
     }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
-    if (k === 'p' || k === 't' || k === 'b') {
+    if (k === 'p' || k === 't' || k === 'b' || k === 'a') {
       e.preventDefault();
       e.stopPropagation();
-      handlers.setTool(k === 'p' ? 'pen' : k === 't' ? 'text' : 'rect');
+      handlers.setTool(k === 'p' ? 'pen' : k === 't' ? 'text' : k === 'b' ? 'rect' : 'arrow');
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
       handlers.deleteSelection();
